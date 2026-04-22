@@ -3,9 +3,10 @@ import { buildMarkdown, buildZip } from './export.js';
 import { sendToMcp } from './mcp.js';
 import type { Session } from '../shared/types.js';
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'CAPTURE_FULL_PAGE') {
-    captureFullPage(message.tabId)
+    const tabId = message.tabId ?? sender.tab?.id;
+    captureFullPage(tabId)
       .then((base64) => sendResponse({ base64 }))
       .catch((e) => sendResponse({ error: String(e) }));
     return true;
@@ -43,19 +44,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
-  if (message.type === 'START_RECORDING') {
-    chrome.runtime.sendMessage({ type: 'START_RECORDING', sources: message.sources })
-      .then(() => sendResponse({ ok: true }))
-      .catch((e) => sendResponse({ error: String(e) }));
-    return true;
-  }
-
-  if (message.type === 'STOP_RECORDING') {
-    chrome.runtime.sendMessage({ type: 'STOP_RECORDING' })
-      .then((result) => sendResponse(result))
-      .catch((e) => sendResponse({ error: String(e) }));
-    return true;
-  }
 });
 
 // Enable annotation mode when extension icon is clicked

@@ -1,7 +1,9 @@
-import type { Annotation, Session } from '../../shared/types.js';
+import type { Annotation, Session, BoundingBox } from '../../shared/types.js';
 import { generateId } from '../../shared/utils.js';
 import { startPicker, stopPicker, getElementInfo } from '../element-picker.js';
+import { startRegionPicker, stopRegionPicker } from '../region-picker.js';
 import { getConsoleLogs } from '../console-capture.js';
+import { startRecording, stopRecording } from '../recorder.js';
 import { renderAnnotationList } from './annotation-list.js';
 import { showPopover } from './popover.js';
 import { renderRecorderBar } from './recorder-bar.js';
@@ -10,6 +12,8 @@ let sidebarHost: HTMLElement | null = null;
 let shadow: ShadowRoot | null = null;
 let annotations: Annotation[] = [];
 let pickingMode = false;
+let regionPickingMode = false;
+let pendingRecording: { base64: string; durationMs: number; sources: ('screen' | 'microphone' | 'tab-audio')[] } | null = null;
 let isRecording = false;
 let recordingStart = 0;
 let recordingInterval: ReturnType<typeof setInterval> | null = null;
@@ -98,6 +102,13 @@ function renderSidebar(): void {
   pickBtn.textContent = 'Pick Element';
   pickBtn.addEventListener('click', togglePickMode);
   toolbar.appendChild(pickBtn);
+
+  const regionBtn = document.createElement('button');
+  regionBtn.className = `s2l-btn${regionPickingMode ? ' active' : ''}`;
+  regionBtn.id = 's2l-region-btn';
+  regionBtn.textContent = 'Pick Region';
+  regionBtn.addEventListener('click', toggleRegionMode);
+  toolbar.appendChild(regionBtn);
 
   // --- Annotation list ---
   const annotationList = document.createElement('div');
@@ -202,6 +213,57 @@ function togglePickMode(): void {
   renderSidebar();
 }
 
+function toggleRegionMode(): void {
+  if (regionPickingMode) {
+    stopRegionPicker();
+    regionPickingMode = false;
+    renderSidebar();
+    return;
+  }
+  regionPickingMode = true;
+  renderSidebar();
+
+  startRegionPicker(async (box: BoundingBox) => {
+    regionPickingMode = false;
+    renderSidebar();
+    await captureRegionAnnotation(box);
+  }, () => {
+    regionPickingMode = false;
+    renderSidebar();
+  });
+}
+
+async function captureRegionAnnotation(box: BoundingBox): Promise<void> {
+  const tempEl = document.body;
+  showPopover(tempEl, annotations.length + 1, async (partial) => {
+    if (!fullPageBase64) {
+      const tab = await chrome.tabs.getCurrent();
+      const res = await chrome.runtime.sendMessage({ type: 'CAPTURE_FULL_PAGE', tabId: tab?.id });
+      fullPageBase64 = res?.base64 ?? '';
+    }
+    let elementScreenshotBase64 = '';
+    if (fullPageBase64) {
+      const cropRes = await chrome.runtime.sendMessage({
+        type: 'CROP_ELEMENT', fullPageBase64, boundingBox: box,
+      });
+      elementScreenshotBase64 = cropRes?.base64 ?? '';
+    }
+    const ann: Annotation = {
+      id: generateId(),
+      number: annotations.length + 1,
+      ...partial,
+      selector: `region(${Math.round(box.x)},${Math.round(box.y)},${Math.round(box.width)}x${Math.round(box.height)})`,
+      elementHTML: '',
+      boundingBox: box,
+      elementScreenshotBase64,
+      elementScreenshotPath: '',
+      createdAt: new Date().toISOString(),
+    };
+    annotations.push(ann);
+    renderSidebar();
+  }, () => { renderSidebar(); });
+}
+
 function deleteAnnotation(id: string): void {
   annotations = annotations.filter((a) => a.id !== id);
   annotations.forEach((a, i) => { a.number = i + 1; });
@@ -210,11 +272,10 @@ function deleteAnnotation(id: string): void {
 
 async function buildSession(): Promise<Session> {
   if (!fullPageBase64) {
-    const tab = await chrome.tabs.getCurrent();
-    const res = await chrome.runtime.sendMessage({ type: 'CAPTURE_FULL_PAGE', tabId: tab?.id });
+    const res = await chrome.runtime.sendMessage({ type: 'CAPTURE_FULL_PAGE' });
     fullPageBase64 = res?.base64 ?? '';
   }
-  return {
+  const session: Session = {
     id: generateId(),
     url: window.location.href,
     pageTitle: document.title,
@@ -225,6 +286,16 @@ async function buildSession(): Promise<Session> {
     consoleLogs: getConsoleLogs(),
     sessionStorage: { ...window.sessionStorage },
   };
+  if (pendingRecording) {
+    session.recording = {
+      filename: 'recording.webm',
+      path: '',
+      sources: pendingRecording.sources,
+      durationMs: pendingRecording.durationMs,
+      base64: pendingRecording.base64,
+    };
+  }
+  return session;
 }
 
 async function handleExport(action: string): Promise<void> {
@@ -251,8 +322,12 @@ async function handleSendToMcp(): Promise<void> {
 
 async function handleStartRecording(sources: ('screen' | 'microphone' | 'tab-audio')[]): Promise<void> {
   selectedSources = new Set(sources);
-  const res = await chrome.runtime.sendMessage({ type: 'START_RECORDING', sources });
-  if (res?.error) { alert(`Recording error: ${res.error}`); return; }
+  try {
+    await startRecording(sources);
+  } catch (err) {
+    alert(`Recording error: ${(err as Error).message}`);
+    return;
+  }
   isRecording = true;
   recordingStart = Date.now();
   recordingInterval = setInterval(() => renderRecorderBar(
@@ -264,14 +339,13 @@ async function handleStartRecording(sources: ('screen' | 'microphone' | 'tab-aud
 
 async function handleStopRecording(): Promise<void> {
   if (recordingInterval) { clearInterval(recordingInterval); recordingInterval = null; }
-  const res = await chrome.runtime.sendMessage({ type: 'STOP_RECORDING' });
-  isRecording = false;
-  if (res?.base64 && !res.error) {
-    (window as any).__s2l_recording = {
-      base64: res.base64, durationMs: res.durationMs, sources: res.sources,
-      filename: 'recording.webm', path: '',
-    };
+  try {
+    const res = await stopRecording();
+    pendingRecording = { base64: res.base64, durationMs: res.durationMs, sources: res.sources };
+  } catch (err) {
+    alert(`Recording error: ${(err as Error).message}`);
   }
+  isRecording = false;
   renderSidebar();
 }
 
