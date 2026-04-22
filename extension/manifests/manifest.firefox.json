@@ -1,0 +1,15 @@
+{
+  "manifest_version": 2,
+  "name": "Send2LLM",
+  "version": "0.1.0",
+  "description": "Annotate web pages and send context to AI coding agents",
+  "permissions": ["activeTab", "storage", "tabs", "<all_urls>"],
+  "background": { "scripts": ["background/index.js"], "persistent": true },
+  "content_scripts": [{
+    "matches": ["<all_urls>"],
+    "js": ["content/index.js"],
+    "run_at": "document_start"
+  }],
+  "browser_action": { "default_popup": "popup/popup.html", "default_icon": { "32": "icon32.png" } },
+  "web_accessible_resources": ["content/sidebar/sidebar.css"]
+}

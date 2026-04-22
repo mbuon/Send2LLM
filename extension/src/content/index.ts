@@ -1,5 +1,5 @@
 import { startConsoleCapture } from './console-capture.js';
-import { toggleSidebar } from '../sidebar/sidebar.js';
+import { toggleSidebar } from './sidebar/sidebar.js';
 
 startConsoleCapture();
 
