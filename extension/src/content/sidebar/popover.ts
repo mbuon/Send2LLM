@@ -1,29 +1,76 @@
-import type { Annotation } from '../../shared/types.js';
+import type { Annotation, BoundingBox } from '../../shared/types.js';
 
 type AnnotationType = Annotation['type'];
+
+export interface PopoverOptions {
+  anchorRect?: DOMRect | { top: number; left: number; bottom: number; right: number; width: number; height: number };
+  highlightBox?: BoundingBox;
+}
 
 export function showPopover(
   anchorEl: Element,
   annotationNumber: number,
   onAdd: (partial: Pick<Annotation, 'type' | 'note'>) => void,
   onCancel: () => void,
+  options: PopoverOptions = {},
 ): void {
   const existing = document.getElementById('s2l-popover-host');
   if (existing) existing.remove();
+  const existingHl = document.getElementById('s2l-region-highlight');
+  if (existingHl) existingHl.remove();
 
   const host = document.createElement('div');
   host.id = 's2l-popover-host';
   const shadow = host.attachShadow({ mode: 'open' });
 
-  const rect = anchorEl.getBoundingClientRect();
+  const styleLink = document.createElement('link');
+  styleLink.rel = 'stylesheet';
+  styleLink.href = chrome.runtime.getURL('content/sidebar/sidebar.css');
+  shadow.appendChild(styleLink);
+
+  // Optional region highlight overlay
+  let highlight: HTMLDivElement | null = null;
+  if (options.highlightBox) {
+    const box = options.highlightBox;
+    highlight = document.createElement('div');
+    highlight.id = 's2l-region-highlight';
+    Object.assign(highlight.style, {
+      position: 'absolute',
+      left: `${box.x}px`,
+      top: `${box.y}px`,
+      width: `${box.width}px`,
+      height: `${box.height}px`,
+      border: '2px solid #f97316',
+      borderRadius: '4px',
+      background: 'rgba(249,115,22,0.12)',
+      boxShadow: '0 0 0 9999px rgba(0,0,0,0.18)',
+      pointerEvents: 'none',
+      zIndex: '2147483646',
+      transition: 'opacity 0.2s ease',
+    } as CSSStyleDeclaration);
+    document.body.appendChild(highlight);
+    // Scroll the region into view, then place popover relative to current scroll
+    const targetScrollY = Math.max(0, box.y - 80);
+    window.scrollTo({ top: targetScrollY, behavior: 'smooth' });
+  }
+
+  const anchor = options.anchorRect ?? anchorEl.getBoundingClientRect();
   let selectedType: AnnotationType = 'task';
 
   const types: AnnotationType[] = ['task', 'bug', 'comment', 'request'];
 
   const popover = document.createElement('div');
   popover.className = 's2l-popover';
-  popover.style.top = `${Math.min(rect.bottom + window.scrollY + 8, window.innerHeight - 200)}px`;
-  popover.style.left = `${rect.left + window.scrollX}px`;
+  // Position in viewport coords (popover is position:fixed)
+  const popWidth = 300;
+  const popHeight = 220;
+  let popLeft = anchor.left;
+  let popTop = anchor.bottom + 8;
+  if (popLeft + popWidth > window.innerWidth - 12) popLeft = window.innerWidth - popWidth - 12;
+  if (popLeft < 12) popLeft = 12;
+  if (popTop + popHeight > window.innerHeight - 12) popTop = Math.max(12, anchor.top - popHeight - 8);
+  popover.style.top = `${popTop}px`;
+  popover.style.left = `${popLeft}px`;
 
   const typeRow = document.createElement('div');
   typeRow.className = 's2l-type-row';
@@ -53,6 +100,7 @@ export function showPopover(
   cancelBtn.textContent = 'Cancel';
   cancelBtn.addEventListener('click', () => {
     host.remove();
+    highlight?.remove();
     onCancel();
   });
 
@@ -63,6 +111,7 @@ export function showPopover(
     const note = textarea.value.trim();
     if (!note) return;
     host.remove();
+    highlight?.remove();
     onAdd({ type: selectedType, note });
   });
 

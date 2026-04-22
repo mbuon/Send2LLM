@@ -296,13 +296,26 @@ function toggleRegionMode(): void {
 }
 
 async function captureRegionAnnotation(box: BoundingBox): Promise<void> {
-  const tempEl = document.body;
-  showPopover(tempEl, annotations.length + 1, async (partial) => {
-    if (!fullPageBase64) {
-      const tab = await chrome.tabs.getCurrent();
-      const res = await chrome.runtime.sendMessage({ type: 'CAPTURE_FULL_PAGE', tabId: tab?.id });
-      fullPageBase64 = res?.base64 ?? '';
-    }
+  // Capture full page FIRST so the user doesn't see the page scroll after picking
+  if (!fullPageBase64) {
+    const res = await chrome.runtime.sendMessage({ type: 'CAPTURE_FULL_PAGE' });
+    fullPageBase64 = res?.base64 ?? '';
+  }
+
+  // Scroll the picked region into view, then anchor popover at its viewport position
+  const targetScrollY = Math.max(0, box.y - 80);
+  const viewportTop = box.y - targetScrollY;
+  const viewportLeft = box.x;
+  const anchorRect = {
+    top: viewportTop,
+    left: viewportLeft,
+    bottom: viewportTop + box.height,
+    right: viewportLeft + box.width,
+    width: box.width,
+    height: box.height,
+  };
+
+  showPopover(document.body, annotations.length + 1, async (partial) => {
     let elementScreenshotBase64 = '';
     if (fullPageBase64) {
       const cropRes = await chrome.runtime.sendMessage({
@@ -323,7 +336,7 @@ async function captureRegionAnnotation(box: BoundingBox): Promise<void> {
     };
     annotations.push(ann);
     renderSidebar();
-  }, () => { renderSidebar(); });
+  }, () => { renderSidebar(); }, { anchorRect, highlightBox: box });
 }
 
 function deleteAnnotation(id: string): void {
