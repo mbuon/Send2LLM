@@ -1,0 +1,9 @@
+body { margin: 0; font-family: system-ui, sans-serif; background: #1e293b; color: #f8fafc; width: 220px; }
+.container { padding: 16px; }
+.title { font-size: 15px; font-weight: 700; margin: 0 0 4px; }
+.subtitle { font-size: 11px; color: #94a3b8; margin: 0 0 14px; }
+.btn-toggle {
+  width: 100%; padding: 8px; border-radius: 6px; border: none;
+  background: #f97316; color: #fff; cursor: pointer; font-weight: 600; font-size: 12px;
+}
+.btn-toggle:hover { background: #ea6d0e; }
