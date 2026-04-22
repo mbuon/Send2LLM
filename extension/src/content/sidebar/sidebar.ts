@@ -45,6 +45,60 @@ function clearElement(el: Element): void {
   while (el.firstChild) el.removeChild(el.firstChild);
 }
 
+const POS_KEY = 's2l-sidebar-pos';
+
+function applySavedPosition(sidebar: HTMLElement): void {
+  try {
+    const raw = localStorage.getItem(POS_KEY);
+    if (!raw) return;
+    const { left, top } = JSON.parse(raw);
+    if (typeof left === 'number' && typeof top === 'number') {
+      sidebar.style.left = `${left}px`;
+      sidebar.style.top = `${top}px`;
+      sidebar.style.right = 'auto';
+    }
+  } catch { /* ignore */ }
+}
+
+function attachDrag(handle: HTMLElement): void {
+  handle.addEventListener('mousedown', (e: MouseEvent) => {
+    if ((e.target as HTMLElement).closest('button')) return;
+    const sidebar = shadow!.getElementById('s2l-sidebar') as HTMLElement | null;
+    if (!sidebar) return;
+
+    const rect = sidebar.getBoundingClientRect();
+    const offsetX = e.clientX - rect.left;
+    const offsetY = e.clientY - rect.top;
+    sidebar.classList.add('dragging');
+    sidebar.style.right = 'auto';
+    e.preventDefault();
+
+    const onMove = (ev: MouseEvent): void => {
+      const maxLeft = window.innerWidth - rect.width;
+      const maxTop = window.innerHeight - 60;
+      const left = Math.max(0, Math.min(maxLeft, ev.clientX - offsetX));
+      const top = Math.max(0, Math.min(maxTop, ev.clientY - offsetY));
+      sidebar.style.left = `${left}px`;
+      sidebar.style.top = `${top}px`;
+    };
+
+    const onUp = (): void => {
+      sidebar.classList.remove('dragging');
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      try {
+        localStorage.setItem(POS_KEY, JSON.stringify({
+          left: parseFloat(sidebar.style.left),
+          top: parseFloat(sidebar.style.top),
+        }));
+      } catch { /* ignore */ }
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  });
+}
+
 function renderSidebar(): void {
   if (!shadow) return;
 
@@ -59,6 +113,7 @@ function renderSidebar(): void {
   // Root sidebar div
   const sidebar = document.createElement('div');
   sidebar.id = 's2l-sidebar';
+  applySavedPosition(sidebar);
 
   // --- Header ---
   const header = document.createElement('div');
@@ -66,7 +121,14 @@ function renderSidebar(): void {
 
   const title = document.createElement('span');
   title.className = 's2l-title';
-  title.textContent = '\u25CF Send2LLM';
+  const dot = document.createElement('span');
+  dot.className = 's2l-title-dot';
+  const label = document.createElement('span');
+  label.textContent = 'Send2LLM';
+  title.appendChild(dot);
+  title.appendChild(label);
+
+  attachDrag(header);
 
   const headerActions = document.createElement('div');
   headerActions.className = 's2l-header-actions';
