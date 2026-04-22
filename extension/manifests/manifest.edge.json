@@ -11,7 +11,7 @@
     "js": ["content/index.js"],
     "run_at": "document_start"
   }],
-  "action": { "default_popup": "popup/popup.html", "default_icon": { "32": "icon32.png" } },
+  "action": { "default_popup": "popup/popup.html" },
   "web_accessible_resources": [{
     "resources": ["offscreen.html", "content/sidebar/sidebar.css"],
     "matches": ["<all_urls>"]
