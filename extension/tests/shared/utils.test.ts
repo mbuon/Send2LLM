@@ -27,9 +27,16 @@ describe('buildCssSelector', () => {
 
   it('uses tag + nth-child when no id', () => {
     const parent = { children: [] as Element[] } as any;
-    const el = { id: '', tagName: 'DIV', className: 'card', parentElement: parent } as any;
+    const el = {
+      id: '',
+      tagName: 'DIV',
+      className: 'card',
+      classList: { length: 1, [Symbol.iterator]: (['card'] as string[])[Symbol.iterator].bind(['card']) },
+      parentElement: parent
+    } as any;
     parent.children = [el];
     const result = buildCssSelector(el);
     expect(result).toContain('div');
+    expect(result).toContain('card');
   });
 });
