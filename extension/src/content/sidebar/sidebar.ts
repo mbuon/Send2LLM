@@ -21,6 +21,12 @@ let recordingInterval: ReturnType<typeof setInterval> | null = null;
 let selectedSources = new Set<'screen' | 'microphone' | 'tab-audio'>(['screen']);
 let fullPageBase64 = '';
 
+type AnnotationType = Annotation['type'];
+type AnnotationTabId = AnnotationType | 'all';
+
+let grabFullPage = false;
+let activeTab: AnnotationTabId = 'all';
+
 export function mountSidebar(): void {
   if (sidebarHost) return;
   sidebarHost = document.createElement('div');
@@ -197,6 +203,45 @@ function renderSidebar(): void {
   regionBtn.addEventListener('click', toggleRegionMode);
   toolbar.appendChild(regionBtn);
 
+  // --- Capture-options row ---
+  const captureRow = document.createElement('div');
+  captureRow.className = 's2l-capture-row';
+  const grabLabel = document.createElement('label');
+  grabLabel.className = 's2l-grab-check';
+  const grabInput = document.createElement('input');
+  grabInput.type = 'checkbox';
+  grabInput.id = 's2l-grab-fullpage';
+  grabInput.checked = grabFullPage;
+  grabInput.addEventListener('change', () => { grabFullPage = grabInput.checked; });
+  grabLabel.appendChild(grabInput);
+  grabLabel.appendChild(document.createTextNode(' Grab full page'));
+  captureRow.appendChild(grabLabel);
+
+  // --- Tab bar (task / bug / comment / request / all) ---
+  const tabBar = document.createElement('div');
+  tabBar.className = 's2l-tabbar';
+  const tabs: { id: AnnotationTabId; label: string }[] = [
+    { id: 'all', label: 'All' },
+    { id: 'task', label: 'Task' },
+    { id: 'bug', label: 'Bug' },
+    { id: 'comment', label: 'Comment' },
+    { id: 'request', label: 'Request' },
+  ];
+  for (const t of tabs) {
+    const tabBtn = document.createElement('button');
+    const count = t.id === 'all'
+      ? annotations.length
+      : annotations.filter((a) => a.type === t.id).length;
+    tabBtn.className = `s2l-tab${activeTab === t.id ? ' active' : ''}`;
+    tabBtn.dataset.tab = t.id;
+    tabBtn.textContent = count > 0 ? `${t.label} (${count})` : t.label;
+    tabBtn.addEventListener('click', () => {
+      activeTab = t.id;
+      renderSidebar();
+    });
+    tabBar.appendChild(tabBtn);
+  }
+
   // --- Annotation list ---
   const annotationList = document.createElement('div');
   annotationList.className = 's2l-annotations';
@@ -258,12 +303,17 @@ function renderSidebar(): void {
   // Assemble sidebar
   sidebar.appendChild(header);
   sidebar.appendChild(toolbar);
+  sidebar.appendChild(captureRow);
+  sidebar.appendChild(tabBar);
   sidebar.appendChild(annotationList);
   sidebar.appendChild(recBar);
   sidebar.appendChild(footer);
   shadow.appendChild(sidebar);
 
-  renderAnnotationList(annotations, deleteAnnotation, shadow);
+  const visibleAnnotations = activeTab === 'all'
+    ? annotations
+    : annotations.filter((a) => a.type === activeTab);
+  renderAnnotationList(visibleAnnotations, deleteAnnotation, shadow);
   renderRecorderBar(shadow, isRecording, isRecording ? Date.now() - recordingStart : 0,
     selectedSources, handleStartRecording, handleStopRecording);
 }
@@ -278,13 +328,7 @@ function togglePickMode(): void {
       renderSidebar();
       const info = getElementInfo(el);
       showPopover(el, annotations.length + 1, async (partial) => {
-        let elementScreenshotBase64 = '';
-        if (fullPageBase64) {
-          const cropRes = await chrome.runtime.sendMessage({
-            type: 'CROP_ELEMENT', fullPageBase64, boundingBox: info.boundingBox,
-          });
-          elementScreenshotBase64 = cropRes?.base64 ?? '';
-        }
+        const elementScreenshotBase64 = await cropBoundingBox(info.boundingBox);
         const ann: Annotation = {
           id: generateId(),
           number: annotations.length + 1, // atomic at push time
@@ -334,12 +378,38 @@ function toggleRegionMode(): void {
   });
 }
 
-async function captureRegionAnnotation(box: BoundingBox): Promise<void> {
-  // Capture full page FIRST so the user doesn't see the page scroll after picking
-  if (!fullPageBase64) {
-    const res = await chrome.runtime.sendMessage({ type: 'CAPTURE_FULL_PAGE' });
-    fullPageBase64 = res?.base64 ?? '';
+// Crop `box` (in page coords) into a PNG base64. When the user has opted into
+// "Grab full page", reuse or lazily acquire the stitched full-page capture.
+// Otherwise take a single-frame viewport capture and shift the box by scroll.
+async function cropBoundingBox(box: BoundingBox): Promise<string> {
+  if (grabFullPage) {
+    if (!fullPageBase64) {
+      const res = await chrome.runtime.sendMessage({ type: 'CAPTURE_FULL_PAGE' });
+      fullPageBase64 = res?.base64 ?? '';
+    }
+    if (!fullPageBase64) return '';
+    const res = await chrome.runtime.sendMessage({
+      type: 'CROP_ELEMENT', fullPageBase64, boundingBox: box,
+    });
+    return res?.base64 ?? '';
   }
+  const viewportRes = await chrome.runtime.sendMessage({ type: 'CAPTURE_VIEWPORT' });
+  const viewportBase64 = viewportRes?.base64 ?? '';
+  if (!viewportBase64) return '';
+  const viewportBox: BoundingBox = {
+    x: box.x - window.scrollX,
+    y: box.y - window.scrollY,
+    width: box.width,
+    height: box.height,
+  };
+  const cropRes = await chrome.runtime.sendMessage({
+    type: 'CROP_ELEMENT', fullPageBase64: viewportBase64, boundingBox: viewportBox,
+  });
+  return cropRes?.base64 ?? '';
+}
+
+async function captureRegionAnnotation(box: BoundingBox): Promise<void> {
+  const regionScreenshotPromise = cropBoundingBox(box);
 
   // Scroll the picked region into view, then anchor popover at its viewport position
   const targetScrollY = Math.max(0, box.y - 80);
@@ -355,13 +425,7 @@ async function captureRegionAnnotation(box: BoundingBox): Promise<void> {
   };
 
   showPopover(document.body, annotations.length + 1, async (partial) => {
-    let elementScreenshotBase64 = '';
-    if (fullPageBase64) {
-      const cropRes = await chrome.runtime.sendMessage({
-        type: 'CROP_ELEMENT', fullPageBase64, boundingBox: box,
-      });
-      elementScreenshotBase64 = cropRes?.base64 ?? '';
-    }
+    const elementScreenshotBase64 = await regionScreenshotPromise;
     const ann: Annotation = {
       id: generateId(),
       number: annotations.length + 1,
@@ -385,7 +449,8 @@ function deleteAnnotation(id: string): void {
 }
 
 async function buildSession(): Promise<Session> {
-  if (!fullPageBase64) {
+  // Only scroll-and-stitch the full page if the user opted in.
+  if (grabFullPage && !fullPageBase64) {
     const res = await chrome.runtime.sendMessage({ type: 'CAPTURE_FULL_PAGE' });
     fullPageBase64 = res?.base64 ?? '';
   }
@@ -394,7 +459,7 @@ async function buildSession(): Promise<Session> {
     url: window.location.href,
     pageTitle: document.title,
     capturedAt: new Date().toISOString(),
-    fullPageScreenshotBase64: fullPageBase64,
+    fullPageScreenshotBase64: grabFullPage ? fullPageBase64 : '',
     fullPageScreenshotPath: '',
     annotations: [...annotations],
     consoleLogs: getConsoleLogs(),

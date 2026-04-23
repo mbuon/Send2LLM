@@ -1,4 +1,4 @@
-import { captureFullPage, cropElement } from './screenshot.js';
+import { captureFullPage, captureViewport, cropElement } from './screenshot.js';
 import { buildMarkdown, buildZip } from './export.js';
 import { sendToMcp } from './mcp.js';
 import type { Session } from '../shared/types.js';
@@ -10,6 +10,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'CAPTURE_FULL_PAGE') {
     const tabId = message.tabId ?? sender.tab?.id;
     captureFullPage(tabId)
+      .then((base64) => sendResponse({ base64 }))
+      .catch((e) => sendResponse({ error: String(e) }));
+    return true;
+  }
+
+  if (message.type === 'CAPTURE_VIEWPORT') {
+    const tabId = message.tabId ?? sender.tab?.id;
+    captureViewport(tabId)
       .then((base64) => sendResponse({ base64 }))
       .catch((e) => sendResponse({ error: String(e) }));
     return true;

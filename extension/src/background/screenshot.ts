@@ -67,6 +67,15 @@ export async function captureFullPage(tabId: number): Promise<string> {
   return base64 as string;
 }
 
+// Single-frame viewport capture — fast, no scrolling. Used when the user
+// does not want a full-page scroll-and-stitch.
+export async function captureViewport(tabId: number): Promise<string> {
+  if (!tabId) throw new Error('captureViewport: tabId required');
+  const targetTab = await chrome.tabs.get(tabId);
+  const dataUrl = await chrome.tabs.captureVisibleTab(targetTab.windowId, { format: 'png' });
+  return dataUrl.split(',')[1] ?? '';
+}
+
 export async function cropElement(
   fullPageBase64: string, x: number, y: number, width: number, height: number,
 ): Promise<string> {
