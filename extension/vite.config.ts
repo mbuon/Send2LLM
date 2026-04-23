@@ -4,7 +4,20 @@ import { copyFileSync, mkdirSync, existsSync } from 'fs';
 
 const browser = (process.env.BROWSER ?? 'chrome') as 'chrome' | 'firefox' | 'edge';
 const isFirefox = browser === 'firefox';
+// When ENTRY=content, build only the content script as a self-contained IIFE
+// (classic script). Other entries build as ESM modules.
+const entry = (process.env.ENTRY ?? 'main') as 'main' | 'content';
 const outDir = resolve(__dirname, `dist/${browser}`);
+
+const mainInputs = {
+  'background/index': resolve(__dirname, 'src/background/index.ts'),
+  'offscreen/index': resolve(__dirname, 'src/offscreen/index.ts'),
+  'popup/popup': resolve(__dirname, 'src/popup/popup.ts'),
+};
+
+const contentInput = {
+  'content/index': resolve(__dirname, 'src/content/index.ts'),
+};
 
 export default defineConfig({
   resolve: {
@@ -19,14 +32,18 @@ export default defineConfig({
   },
   build: {
     outDir,
-    emptyOutDir: true,
-    rollupOptions: {
-      input: {
-        'background/index': resolve(__dirname, 'src/background/index.ts'),
-        'content/index': resolve(__dirname, 'src/content/index.ts'),
-        'offscreen/index': resolve(__dirname, 'src/offscreen/index.ts'),
-        'popup/popup': resolve(__dirname, 'src/popup/popup.ts'),
+    // The content-script pass runs after the main pass; keep its output.
+    emptyOutDir: entry === 'main',
+    rollupOptions: entry === 'content' ? {
+      input: contentInput,
+      output: {
+        entryFileNames: '[name].js',
+        assetFileNames: '[name][extname]',
+        format: 'iife',
+        inlineDynamicImports: true,
       },
+    } : {
+      input: mainInputs,
       output: {
         entryFileNames: '[name].js',
         chunkFileNames: 'chunks/[name]-[hash].js',
@@ -39,13 +56,14 @@ export default defineConfig({
     {
       name: 'copy-extension-assets',
       closeBundle() {
-        // Copy manifest
+        // Assets are only copied on the main pass; content pass skips this.
+        if (entry !== 'main') return;
+
         copyFileSync(
           resolve(__dirname, `manifests/manifest.${browser}.json`),
           resolve(outDir, 'manifest.json'),
         );
 
-        // Copy popup.html
         const popupDir = resolve(outDir, 'popup');
         if (!existsSync(popupDir)) mkdirSync(popupDir, { recursive: true });
         copyFileSync(
@@ -53,13 +71,11 @@ export default defineConfig({
           resolve(popupDir, 'popup.html'),
         );
 
-        // Copy offscreen.html to dist root
         copyFileSync(
           resolve(__dirname, 'src/offscreen/offscreen.html'),
           resolve(outDir, 'offscreen.html'),
         );
 
-        // Copy sidebar.css preserving path structure: content/sidebar/sidebar.css
         const sidebarDir = resolve(outDir, 'content/sidebar');
         if (!existsSync(sidebarDir)) mkdirSync(sidebarDir, { recursive: true });
         copyFileSync(
