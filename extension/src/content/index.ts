@@ -12,9 +12,14 @@ const CURRENT_EPOCH = epochHolder.__send2llmEpoch;
 
 startConsoleCapture();
 
-chrome.runtime.onMessage.addListener((message) => {
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (epochHolder.__send2llmEpoch !== CURRENT_EPOCH) return;
-  if (message.type === 'TOGGLE_SIDEBAR') {
+  if (message?.type === 'PING') {
+    sendResponse({ ok: true, epoch: CURRENT_EPOCH });
+    return;
+  }
+  if (message?.type === 'TOGGLE_SIDEBAR') {
     toggleSidebar();
+    sendResponse({ ok: true });
   }
 });
