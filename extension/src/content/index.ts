@@ -1,17 +1,19 @@
 import { startConsoleCapture } from './console-capture.js';
 import { toggleSidebar } from './sidebar/sidebar.js';
 
-// Generation counter (pattern adapted from Obsidian Web Clipper, MIT).
-// After an extension reload, the previous content-script's listeners stay attached
-// in the page until navigation. We bump a shared counter and ignore messages
-// that arrive on stale listeners. See NOTICES.md.
-const w = window as unknown as { __s2lGen?: number };
-const GEN = (w.__s2lGen = (w.__s2lGen || 0) + 1);
+// After the extension reloads, message listeners from the previous content-script
+// instance stay attached to the page until navigation. Each instance stamps
+// itself with an incrementing epoch on the window object; handlers ignore
+// messages unless they belong to the current epoch. (Pattern credit: NOTICES.md.)
+interface EpochHolder { __send2llmEpoch?: number }
+const epochHolder = window as unknown as EpochHolder;
+epochHolder.__send2llmEpoch = (epochHolder.__send2llmEpoch ?? 0) + 1;
+const CURRENT_EPOCH = epochHolder.__send2llmEpoch;
 
 startConsoleCapture();
 
 chrome.runtime.onMessage.addListener((message) => {
-  if (w.__s2lGen !== GEN) return;
+  if (epochHolder.__send2llmEpoch !== CURRENT_EPOCH) return;
   if (message.type === 'TOGGLE_SIDEBAR') {
     toggleSidebar();
   }

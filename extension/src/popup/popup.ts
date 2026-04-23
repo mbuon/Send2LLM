@@ -1,8 +1,8 @@
-import { isRestrictedUrl } from '../shared/utils.js';
+import { isUninjectableUrl } from '../shared/utils.js';
 
 document.getElementById('toggle-btn')!.addEventListener('click', async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab.id || !tab.url || isRestrictedUrl(tab.url)) {
+  if (!tab.id || !tab.url || isUninjectableUrl(tab.url)) {
     alert('Send2LLM cannot run on this page (browser internal page or extension store).');
     return;
   }

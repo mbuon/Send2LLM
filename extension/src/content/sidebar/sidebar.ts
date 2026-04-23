@@ -1,6 +1,6 @@
 import type { Annotation, Session, BoundingBox } from '../../shared/types.js';
 import { generateId } from '../../shared/utils.js';
-import { throttle } from '../../shared/timing.js';
+import { throttled } from '../../shared/timing.js';
 import { startPicker, stopPicker, getElementInfo } from '../element-picker.js';
 import { startRegionPicker, stopRegionPicker } from '../region-picker.js';
 import { getConsoleLogs } from '../console-capture.js';
@@ -92,7 +92,7 @@ function onDragMouseDown(e: MouseEvent): void {
   sidebar.style.right = 'auto';
   e.preventDefault();
 
-  const onMove = throttle((ev: MouseEvent): void => {
+  const onMove = throttled((ev: MouseEvent): void => {
     // Recompute width every frame in case the sidebar resized (collapse/expand)
     const liveRect = sidebar.getBoundingClientRect();
     const maxLeft = Math.max(0, window.innerWidth - liveRect.width);

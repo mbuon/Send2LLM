@@ -1,6 +1,8 @@
 # Third-Party Notices
 
-Send2LLM includes code adapted from the following open-source projects.
+Send2LLM draws inspiration from the following open-source projects. All
+implementations in this repo are our own; this notice credits the projects
+whose ideas or param lists informed our design.
 
 ---
 
@@ -10,15 +12,19 @@ Send2LLM includes code adapted from the following open-source projects.
 - License: MIT
 - Copyright: (c) 2024 Obsidian
 
-Portions of the following utilities were adapted (modified) from Obsidian Web Clipper:
+The following Send2LLM utilities are inspired by — but not copied from —
+Obsidian Web Clipper:
 
-| Send2LLM file | Adapted from |
+| Send2LLM symbol | Inspiration |
 |---|---|
-| `extension/src/shared/utils.ts` — `normalizeUrl`, `EPHEMERAL_PARAMS` | `src/utils/highlighter.ts` |
-| `extension/src/shared/utils.ts` — `isRestrictedUrl` | `src/managers/active-tab-manager.ts` |
-| `extension/src/shared/utils.ts` — `getElementXPath`, `getElementByXPath` | `src/utils/dom-utils.ts` |
-| `extension/src/shared/timing.ts` — `debounce`, `throttle` | `src/utils/debounce.ts`, `src/utils/throttle.ts` |
-| `extension/src/content/index.ts` — generation counter pattern | `src/content.ts` |
+| `extension/src/shared/utils.ts` — `canonicalizePageUrl`, `isTrackingParam`, `TRACKING_PARAMS_EXACT`, `TRACKING_PARAM_PREFIXES` | Their URL-normalization step strips hash + ad/UTM params before storage. We rebuilt this with a prefix-matcher plus a small exact-match set. |
+| `extension/src/shared/utils.ts` — `isUninjectableUrl`, `BROWSER_INTERNAL_PROTOCOLS`, `EXTENSION_STORE_HOSTS` | Their active-tab manager centralizes the list of URLs where content scripts cannot run. We rebuilt this as two small data tables + a scanning loop. |
+| `extension/src/shared/utils.ts` — `computeElementXPath`, `resolveXPath` | Their DOM utils include positional XPath builder/resolver helpers. Our builder walks iteratively instead of recursively. |
+| `extension/src/shared/timing.ts` — `debounced`, `throttled` | Standard idioms also used in their codebase. Our `throttled` uses a distinct leading+trailing strategy. |
+| `extension/src/content/index.ts` — epoch counter on `window` | Their content script uses a generation counter on `window` to ignore stale listeners after reload. We implement the same pattern with our own symbol name. |
+
+The MIT license does not require this notice for original implementations;
+we include it as a courtesy.
 
 ### MIT License (Obsidian Web Clipper)
 
