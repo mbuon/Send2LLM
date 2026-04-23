@@ -1,7 +1,9 @@
+import { isRestrictedUrl } from '../shared/utils.js';
+
 document.getElementById('toggle-btn')!.addEventListener('click', async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab.id || !tab.url || /^(chrome|edge|about|moz-extension|chrome-extension):/i.test(tab.url)) {
-    alert('Send2LLM cannot run on this page (browser internal page).');
+  if (!tab.id || !tab.url || isRestrictedUrl(tab.url)) {
+    alert('Send2LLM cannot run on this page (browser internal page or extension store).');
     return;
   }
   try {

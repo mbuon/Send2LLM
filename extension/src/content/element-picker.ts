@@ -1,4 +1,4 @@
-import { buildCssSelector } from '../shared/utils.js';
+import { buildCssSelector, getElementXPath } from '../shared/utils.js';
 import type { BoundingBox } from '../shared/types.js';
 
 const HIGHLIGHT_CLASS = 's2l-highlight';
@@ -51,10 +51,11 @@ export function stopPicker(): void {
   document.querySelectorAll(`.${HIGHLIGHT_CLASS}`).forEach((el) => el.classList.remove(HIGHLIGHT_CLASS));
 }
 
-export function getElementInfo(el: Element): { selector: string; elementHTML: string; boundingBox: BoundingBox } {
+export function getElementInfo(el: Element): { selector: string; xpath: string; elementHTML: string; boundingBox: BoundingBox } {
   const rect = el.getBoundingClientRect();
   return {
     selector: buildCssSelector(el),
+    xpath: getElementXPath(el),
     elementHTML: (el as HTMLElement).outerHTML.slice(0, 2000),
     boundingBox: {
       x: rect.left + window.scrollX,

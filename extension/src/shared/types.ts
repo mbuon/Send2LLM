@@ -11,6 +11,7 @@ export interface Annotation {
   type: 'task' | 'bug' | 'comment' | 'request';
   note: string;
   selector: string;
+  xpath?: string;
   elementHTML: string;
   elementScreenshotBase64: string;
   elementScreenshotPath: string;
