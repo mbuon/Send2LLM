@@ -4,6 +4,9 @@ import { sendToMcp } from './mcp.js';
 import type { Session } from '../shared/types.js';
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Messages tagged for the offscreen document are not for us
+  if (message?.target === 'offscreen') return false;
+
   if (message.type === 'CAPTURE_FULL_PAGE') {
     const tabId = message.tabId ?? sender.tab?.id;
     captureFullPage(tabId)

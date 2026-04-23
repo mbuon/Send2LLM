@@ -72,6 +72,10 @@ export function showPopover(
   popover.style.top = `${popTop}px`;
   popover.style.left = `${popLeft}px`;
 
+  const numLabel = document.createElement('div');
+  numLabel.style.cssText = 'font-size:11px;color:#86868b;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;margin-bottom:8px;';
+  numLabel.textContent = `Annotation #${annotationNumber}`;
+
   const typeRow = document.createElement('div');
   typeRow.className = 's2l-type-row';
 
@@ -95,14 +99,25 @@ export function showPopover(
   const actions = document.createElement('div');
   actions.className = 's2l-popover-actions';
 
+  const cleanup = (): void => {
+    host.remove();
+    highlight?.remove();
+    document.removeEventListener('keydown', onKey, true);
+  };
+
+  const onKey = (ev: KeyboardEvent): void => {
+    if (ev.key === 'Escape') { ev.stopPropagation(); cleanup(); onCancel(); }
+    if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey)) {
+      ev.preventDefault();
+      addBtn.click();
+    }
+  };
+  document.addEventListener('keydown', onKey, true);
+
   const cancelBtn = document.createElement('button');
   cancelBtn.className = 's2l-btn-cancel';
   cancelBtn.textContent = 'Cancel';
-  cancelBtn.addEventListener('click', () => {
-    host.remove();
-    highlight?.remove();
-    onCancel();
-  });
+  cancelBtn.addEventListener('click', () => { cleanup(); onCancel(); });
 
   const addBtn = document.createElement('button');
   addBtn.className = 's2l-btn-add';
@@ -110,14 +125,14 @@ export function showPopover(
   addBtn.addEventListener('click', () => {
     const note = textarea.value.trim();
     if (!note) return;
-    host.remove();
-    highlight?.remove();
+    cleanup();
     onAdd({ type: selectedType, note });
   });
 
   actions.appendChild(cancelBtn);
   actions.appendChild(addBtn);
 
+  popover.appendChild(numLabel);
   popover.appendChild(typeRow);
   popover.appendChild(textarea);
   popover.appendChild(actions);

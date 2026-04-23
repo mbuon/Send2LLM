@@ -30,11 +30,25 @@ export function mountSidebar(): void {
 }
 
 export function unmountSidebar(): void {
+  // Stop any active modal interactions
+  stopPicker();
+  stopRegionPicker();
+  pickingMode = false;
+  regionPickingMode = false;
+
+  // Tear down recording timer (the recording itself is not silently killed —
+  // the user must explicitly Stop. But the timer references a stale shadow.)
+  if (recordingInterval) { clearInterval(recordingInterval); recordingInterval = null; }
+
+  // Clean up any orphan popover / region highlight created via document.body
+  document.getElementById('s2l-popover-host')?.remove();
+  document.getElementById('s2l-region-highlight')?.remove();
+
   sidebarHost?.remove();
   sidebarHost = null;
   shadow = null;
-  annotations = [];
-  stopPicker();
+  // Note: we intentionally KEEP `annotations` so a user closing the sidebar
+  // accidentally does not lose work. They are cleared on a fresh page load.
 }
 
 export function toggleSidebar(): void {
@@ -51,52 +65,57 @@ function applySavedPosition(sidebar: HTMLElement): void {
   try {
     const raw = localStorage.getItem(POS_KEY);
     if (!raw) return;
-    const { left, top } = JSON.parse(raw);
-    if (typeof left === 'number' && typeof top === 'number') {
-      sidebar.style.left = `${left}px`;
-      sidebar.style.top = `${top}px`;
-      sidebar.style.right = 'auto';
-    }
+    const parsed = JSON.parse(raw);
+    if (typeof parsed?.left !== 'number' || typeof parsed?.top !== 'number') return;
+    // Clamp to current viewport so a sidebar saved on a wide monitor isn't
+    // stuck off-screen on a narrow one.
+    const minVisible = 80;
+    const left = Math.max(0, Math.min(window.innerWidth - minVisible, parsed.left));
+    const top = Math.max(0, Math.min(window.innerHeight - 40, parsed.top));
+    sidebar.style.left = `${left}px`;
+    sidebar.style.top = `${top}px`;
+    sidebar.style.right = 'auto';
   } catch { /* ignore */ }
 }
 
-function attachDrag(handle: HTMLElement): void {
-  handle.addEventListener('mousedown', (e: MouseEvent) => {
-    if ((e.target as HTMLElement).closest('button')) return;
-    const sidebar = shadow!.getElementById('s2l-sidebar') as HTMLElement | null;
-    if (!sidebar) return;
+function onDragMouseDown(e: MouseEvent): void {
+  if ((e.target as HTMLElement).closest('button')) return;
+  if (!shadow) return;
+  const sidebar = shadow.getElementById('s2l-sidebar') as HTMLElement | null;
+  if (!sidebar) return;
 
-    const rect = sidebar.getBoundingClientRect();
-    const offsetX = e.clientX - rect.left;
-    const offsetY = e.clientY - rect.top;
-    sidebar.classList.add('dragging');
-    sidebar.style.right = 'auto';
-    e.preventDefault();
+  const rect = sidebar.getBoundingClientRect();
+  const offsetX = e.clientX - rect.left;
+  const offsetY = e.clientY - rect.top;
+  sidebar.classList.add('dragging');
+  sidebar.style.right = 'auto';
+  e.preventDefault();
 
-    const onMove = (ev: MouseEvent): void => {
-      const maxLeft = window.innerWidth - rect.width;
-      const maxTop = window.innerHeight - 60;
-      const left = Math.max(0, Math.min(maxLeft, ev.clientX - offsetX));
-      const top = Math.max(0, Math.min(maxTop, ev.clientY - offsetY));
-      sidebar.style.left = `${left}px`;
-      sidebar.style.top = `${top}px`;
-    };
+  const onMove = (ev: MouseEvent): void => {
+    // Recompute width every frame in case the sidebar resized (collapse/expand)
+    const liveRect = sidebar.getBoundingClientRect();
+    const maxLeft = Math.max(0, window.innerWidth - liveRect.width);
+    const maxTop = Math.max(0, window.innerHeight - 40);
+    const left = Math.max(0, Math.min(maxLeft, ev.clientX - offsetX));
+    const top = Math.max(0, Math.min(maxTop, ev.clientY - offsetY));
+    sidebar.style.left = `${left}px`;
+    sidebar.style.top = `${top}px`;
+  };
 
-    const onUp = (): void => {
-      sidebar.classList.remove('dragging');
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-      try {
-        localStorage.setItem(POS_KEY, JSON.stringify({
-          left: parseFloat(sidebar.style.left),
-          top: parseFloat(sidebar.style.top),
-        }));
-      } catch { /* ignore */ }
-    };
+  const onUp = (): void => {
+    sidebar.classList.remove('dragging');
+    window.removeEventListener('mousemove', onMove);
+    window.removeEventListener('mouseup', onUp);
+    try {
+      localStorage.setItem(POS_KEY, JSON.stringify({
+        left: parseFloat(sidebar.style.left),
+        top: parseFloat(sidebar.style.top),
+      }));
+    } catch { /* ignore */ }
+  };
 
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  });
+  window.addEventListener('mousemove', onMove);
+  window.addEventListener('mouseup', onUp);
 }
 
 function renderSidebar(): void {
@@ -128,7 +147,7 @@ function renderSidebar(): void {
   title.appendChild(dot);
   title.appendChild(label);
 
-  attachDrag(header);
+  header.addEventListener('mousedown', onDragMouseDown);
 
   const headerActions = document.createElement('div');
   headerActions.className = 's2l-header-actions';
@@ -250,21 +269,22 @@ function togglePickMode(): void {
       pickingMode = false;
       const info = getElementInfo(el);
       showPopover(el, annotations.length + 1, async (partial) => {
+        let elementScreenshotBase64 = '';
+        if (fullPageBase64) {
+          const cropRes = await chrome.runtime.sendMessage({
+            type: 'CROP_ELEMENT', fullPageBase64, boundingBox: info.boundingBox,
+          });
+          elementScreenshotBase64 = cropRes?.base64 ?? '';
+        }
         const ann: Annotation = {
           id: generateId(),
-          number: annotations.length + 1,
+          number: annotations.length + 1, // atomic at push time
           ...partial,
           ...info,
-          elementScreenshotBase64: '',
+          elementScreenshotBase64,
           elementScreenshotPath: '',
           createdAt: new Date().toISOString(),
         };
-        if (fullPageBase64) {
-          const { base64 } = await chrome.runtime.sendMessage({
-            type: 'CROP_ELEMENT', fullPageBase64, boundingBox: info.boundingBox,
-          });
-          ann.elementScreenshotBase64 = base64 ?? '';
-        }
         annotations.push(ann);
         renderSidebar();
       }, () => { pickingMode = false; renderSidebar(); });
@@ -359,7 +379,7 @@ async function buildSession(): Promise<Session> {
     fullPageScreenshotPath: '',
     annotations: [...annotations],
     consoleLogs: getConsoleLogs(),
-    sessionStorage: { ...window.sessionStorage },
+    sessionStorage: snapshotSessionStorage(),
   };
   if (pendingRecording) {
     session.recording = {
@@ -422,6 +442,17 @@ async function handleStopRecording(): Promise<void> {
   }
   isRecording = false;
   renderSidebar();
+}
+
+function snapshotSessionStorage(): Record<string, string> {
+  const out: Record<string, string> = {};
+  try {
+    for (let i = 0; i < window.sessionStorage.length; i++) {
+      const key = window.sessionStorage.key(i);
+      if (key !== null) out[key] = window.sessionStorage.getItem(key) ?? '';
+    }
+  } catch { /* sandboxed iframes can throw on access */ }
+  return out;
 }
 
 function downloadBlob(blob: Blob, filename: string): void {

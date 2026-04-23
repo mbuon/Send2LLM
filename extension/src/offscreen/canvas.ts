@@ -1,22 +1,37 @@
-export async function stitchStrips(strips: string[]): Promise<string> {
+type Strip = string | { dataUrl: string; cropTop?: number };
+
+export async function stitchStrips(strips: Strip[]): Promise<string> {
+  const normalized = strips.map((s) => typeof s === 'string' ? { dataUrl: s, cropTop: 0 } : { dataUrl: s.dataUrl, cropTop: s.cropTop ?? 0 });
+
   const images = await Promise.all(
-    strips.map((src) => new Promise<HTMLImageElement>((resolve, reject) => {
+    normalized.map(({ dataUrl }) => new Promise<HTMLImageElement>((resolve, reject) => {
       const img = new Image();
       img.onload = () => resolve(img);
       img.onerror = reject;
-      img.src = src;
+      img.src = dataUrl;
     }))
   );
 
+  if (images.length === 0) throw new Error('stitchStrips: no strips');
+
   const width = images[0].width;
-  const totalHeight = images.reduce((sum, img) => sum + img.height, 0);
+  let totalHeight = 0;
+  const visibleHeights: number[] = [];
+  for (let i = 0; i < images.length; i++) {
+    const cropTop = normalized[i].cropTop ?? 0;
+    const visible = Math.max(0, images[i].height - cropTop);
+    visibleHeights.push(visible);
+    totalHeight += visible;
+  }
 
   const canvas = new OffscreenCanvas(width, totalHeight);
   const ctx = canvas.getContext('2d')!;
   let y = 0;
-  for (const img of images) {
-    ctx.drawImage(img, 0, y);
-    y += img.height;
+  for (let i = 0; i < images.length; i++) {
+    const img = images[i];
+    const cropTop = normalized[i].cropTop ?? 0;
+    ctx.drawImage(img, 0, cropTop, img.width, img.height - cropTop, 0, y, img.width, img.height - cropTop);
+    y += visibleHeights[i];
   }
 
   const blob = await canvas.convertToBlob({ type: 'image/png' });

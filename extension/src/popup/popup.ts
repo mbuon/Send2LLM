@@ -8,7 +8,18 @@ document.getElementById('toggle-btn')!.addEventListener('click', async () => {
     await chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_SIDEBAR' });
   } catch {
     try {
-      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content/index.js'] });
+      const scripting = (chrome as any).scripting;
+      if (scripting?.executeScript) {
+        await scripting.executeScript({ target: { tabId: tab.id }, files: ['content/index.js'] });
+      } else if ((chrome as any).tabs?.executeScript) {
+        // Firefox MV2 fallback
+        await new Promise<void>((resolve, reject) => {
+          (chrome as any).tabs.executeScript(tab.id, { file: 'content/index.js' },
+            () => chrome.runtime.lastError ? reject(new Error(chrome.runtime.lastError.message)) : resolve());
+        });
+      } else {
+        throw new Error('No scripting API available');
+      }
       await chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_SIDEBAR' });
     } catch (e) {
       alert(`Send2LLM: ${(e as Error).message}`);

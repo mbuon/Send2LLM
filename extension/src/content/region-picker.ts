@@ -70,10 +70,11 @@ function onMouseUp(e: MouseEvent): void {
   const h = Math.abs(e.clientY - startY);
 
   const cb = onPick;
+  const cancel = onCancel;
   cleanup();
 
   if (w < 5 || h < 5) {
-    onCancel?.();
+    cancel?.();
     return;
   }
 

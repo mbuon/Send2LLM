@@ -47,13 +47,15 @@ export function stopPicker(): void {
   document.removeEventListener('mouseover', onMouseOver, true);
   document.removeEventListener('mouseout', onMouseOut, true);
   document.removeEventListener('click', onClick, true);
+  // Strip any leftover highlight class from the page
+  document.querySelectorAll(`.${HIGHLIGHT_CLASS}`).forEach((el) => el.classList.remove(HIGHLIGHT_CLASS));
 }
 
-export function getElementInfo(el: Element): { selector: string; html: string; boundingBox: BoundingBox } {
+export function getElementInfo(el: Element): { selector: string; elementHTML: string; boundingBox: BoundingBox } {
   const rect = el.getBoundingClientRect();
   return {
     selector: buildCssSelector(el),
-    html: (el as HTMLElement).outerHTML.slice(0, 2000),
+    elementHTML: (el as HTMLElement).outerHTML.slice(0, 2000),
     boundingBox: {
       x: rect.left + window.scrollX,
       y: rect.top + window.scrollY,
