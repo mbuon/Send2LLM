@@ -60,6 +60,11 @@ function clearElement(el: Element): void {
   while (el.firstChild) el.removeChild(el.firstChild);
 }
 
+function setSidebarVisible(visible: boolean): void {
+  if (!sidebarHost) return;
+  sidebarHost.style.display = visible ? '' : 'none';
+}
+
 const POS_KEY = 's2l-sidebar-pos';
 
 function applySavedPosition(sidebar: HTMLElement): void {
@@ -266,8 +271,11 @@ function renderSidebar(): void {
 function togglePickMode(): void {
   pickingMode = !pickingMode;
   if (pickingMode) {
+    setSidebarVisible(false);
     startPicker(async (el) => {
       pickingMode = false;
+      setSidebarVisible(true);
+      renderSidebar();
       const info = getElementInfo(el);
       showPopover(el, annotations.length + 1, async (partial) => {
         let elementScreenshotBase64 = '';
@@ -288,10 +296,16 @@ function togglePickMode(): void {
         };
         annotations.push(ann);
         renderSidebar();
-      }, () => { pickingMode = false; renderSidebar(); });
+      }, () => { pickingMode = false; setSidebarVisible(true); renderSidebar(); });
+    }, () => {
+      // ESC pressed before selecting an element
+      pickingMode = false;
+      setSidebarVisible(true);
+      renderSidebar();
     });
   } else {
     stopPicker();
+    setSidebarVisible(true);
   }
   renderSidebar();
 }
@@ -300,18 +314,22 @@ function toggleRegionMode(): void {
   if (regionPickingMode) {
     stopRegionPicker();
     regionPickingMode = false;
+    setSidebarVisible(true);
     renderSidebar();
     return;
   }
   regionPickingMode = true;
   renderSidebar();
+  setSidebarVisible(false);
 
   startRegionPicker(async (box: BoundingBox) => {
     regionPickingMode = false;
+    setSidebarVisible(true);
     renderSidebar();
     await captureRegionAnnotation(box);
   }, () => {
     regionPickingMode = false;
+    setSidebarVisible(true);
     renderSidebar();
   });
 }
