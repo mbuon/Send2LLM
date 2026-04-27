@@ -182,11 +182,122 @@ After you annotate a page and click "Send → MCP", your agent can answer prompt
 
 ## Export Formats
 
+The widget's **Export ▾** menu offers three formats. They all carry the same session — the choice is just about what your downstream tool wants to ingest.
+
 | Format | Best for |
 |---|---|
-| **Markdown** | Paste directly into Claude.ai, ChatGPT, any web chat |
-| **ZIP** | Attach files to Claude Code, Cursor, Codex CLI sessions |
-| **JSON** | API workflows, custom integrations |
+| **Copy Markdown** | Paste directly into Claude.ai, ChatGPT, Gemini, any web chat. Embeds screenshots inline as `data:image/png;base64,…` so a single paste carries everything. |
+| **Download ZIP** | Attach to Claude Code, Cursor, Codex CLI sessions. Contains `report.md` (with screenshot paths instead of base64), `report.json`, a `screenshots/` folder of element + full-page PNGs, and a `recordings/` folder of webm files. |
+| **Download JSON** | API workflows, custom integrations. The raw `Session` object — the same shape the MCP server stores. |
+
+### Example: Markdown export
+
+The Markdown export is self-contained — every screenshot is embedded as a `data:` URL so you can drop the whole document into a chat with no attachments. Per-annotation metadata includes the URL the annotation was made on, the ISO timestamp, the CSS selector, the XPath, and the bounding box.
+
+```markdown
+# Send2LLM Report
+URL: https://www.ilsole24ore.com/
+Page: Il Sole 24 Ore: notizie di economia, finanza, borsa, fisco, cronaca italiana ed esteri - Il Sole 24 ORE
+Captured: 2026-04-27T16:50:35.740Z
+
+## Full Page Screenshot
+![Full Page](data:image/png;base64,…)
+
+## Console Logs
+_No logs captured._
+
+## Session Storage
+___nrbic: {"previousVisit":1777290943,"lastBeat":1777308516,…}
+___nrbi:  {"firstVisit":1774263550,"userId":"ca15f277-…",…}
+compass_rfv_5517: {"rfv":{"rfv":74.93,"r":1,"f":26,"v":53},"ts":"2026-04-27T16:48:36.262Z"}
+
+## Annotations (4)
+
+### [TASK] #1
+- Created: 2026-04-27T16:48:54.310Z
+- Page URL: https://www.ilsole24ore.com/
+- Selector: `a:nth-child(1)`
+- XPath:    `/html/body[1]/div[1]/div[1]/div[1]/div[6]/main[1]/div[15]/section[1]/div[1]/div[1]/div[1]/div[4]/article[1]/div[1]/h3[1]/a[1]`
+- Bounding box: 733,18519 144×155
+
+> dfsdfdsfdsf
+
+![Element #1](data:image/png;base64,…)
+
+### [BUG] #2
+- Created: 2026-04-27T16:48:54.310Z
+- Page URL: https://www.ilsole24ore.com/
+- Selector: `a:nth-child(1)`
+- XPath:    `/html/body[1]/div[1]/div[1]/div[1]/div[6]/main[1]/div[15]/section[1]/div[1]/div[1]/div[1]/div[4]/article[1]/div[1]/h3[1]/a[1]`
+- Bounding box: 733,18519 144×155
+
+> fdgfdgfd
+
+![Element #2](data:image/png;base64,…)
+
+### [COMMENT] #3
+- Created: 2026-04-27T16:48:54.310Z
+- Page URL: https://www.ilsole24ore.com/
+- Selector: `a:nth-child(1)`
+- XPath:    `/html/body[1]/div[1]/div[1]/div[1]/div[6]/main[1]/div[15]/section[1]/div[1]/div[1]/div[1]/div[4]/article[1]/div[1]/h3[1]/a[1]`
+- Bounding box: 733,18519 144×155
+
+> dfgfdg
+
+![Element #3](data:image/png;base64,…)
+
+### [REQUEST] #4
+- Created: 2026-04-27T16:48:54.310Z
+- Page URL: https://www.ilsole24ore.com/
+- Selector: `a:nth-child(1)`
+- XPath:    `/html/body[1]/div[1]/div[1]/div[1]/div[6]/main[1]/div[15]/section[1]/div[1]/div[1]/div[1]/div[4]/article[1]/div[1]/h3[1]/a[1]`
+- Bounding box: 733,18519 144×155
+
+> dfgfff
+
+![Element #4](data:image/png;base64,…)
+```
+
+In real exports the `data:image/png;base64,…` placeholders are filled with the actual encoded PNG bytes, so the Markdown file is large (often several MB for a session with a full-page screenshot and multiple annotations). The ellipses above are only for documentation readability.
+
+### Example: JSON export
+
+The JSON export is the same session object the MCP server stores. The structure (with screenshot blobs elided to keep the README readable):
+
+```json
+{
+  "id": "1777308635740-ils24",
+  "url": "https://www.ilsole24ore.com/",
+  "pageTitle": "Il Sole 24 Ore: notizie di economia, finanza, borsa, fisco, cronaca italiana ed esteri - Il Sole 24 ORE",
+  "capturedAt": "2026-04-27T16:50:35.740Z",
+  "fullPageScreenshotBase64": "iVBORw0KGgoAAAANS…",
+  "fullPageScreenshotPath": "",
+  "annotations": [
+    {
+      "id": "abc-1",
+      "number": 1,
+      "type": "task",
+      "note": "dfsdfdsfdsf",
+      "selector": "a:nth-child(1)",
+      "xpath": "/html/body[1]/div[1]/…/h3[1]/a[1]",
+      "elementHTML": "<a href=\"…\">…</a>",
+      "elementScreenshotBase64": "iVBORw0KGgoAAAANS…",
+      "elementScreenshotPath": "",
+      "boundingBox": { "x": 733, "y": 18519, "width": 144, "height": 155 },
+      "createdAt": "2026-04-27T16:48:54.310Z"
+    }
+    /* …#2 BUG, #3 COMMENT, #4 REQUEST follow with the same shape */
+  ],
+  "consoleLogs": [],
+  "sessionStorage": {
+    "___nrbi":  "{\"firstVisit\":1774263550,\"userId\":\"ca15f277-…\"}",
+    "___nrbic": "{\"previousVisit\":1777290943,…}"
+  },
+  "recordings": []
+}
+```
+
+The MCP server adds two derived fields once it has persisted the assets to disk: `fullPageScreenshotPath` and each annotation's `elementScreenshotPath` point at files under `~/.send2llm/sessions/<id>/`. Recordings get a `transcript` field once whisper.cpp finishes the auto-transcription.
 
 ---
 
