@@ -82,6 +82,16 @@ export default defineConfig({
           resolve(__dirname, 'src/content/sidebar/sidebar.css'),
           resolve(sidebarDir, 'sidebar.css'),
         );
+
+        // Copy toolbar / install icons referenced by every manifest.
+        const iconsDir = resolve(outDir, 'icons');
+        if (!existsSync(iconsDir)) mkdirSync(iconsDir, { recursive: true });
+        for (const f of ['icon-16.png', 'icon-32.png', 'icon-48.png', 'icon-128.png']) {
+          copyFileSync(
+            resolve(__dirname, 'assets/icons', f),
+            resolve(iconsDir, f),
+          );
+        }
       },
     },
   ],

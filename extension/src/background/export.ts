@@ -38,13 +38,13 @@ export function buildMarkdown(session: Session): string {
     );
   }
 
-  if (session.recording) {
-    lines.push(
-      ``, `## Recording`,
-      `File: ${session.recording.filename} (${Math.round(session.recording.durationMs / 1000)}s)`,
-      `Sources: ${session.recording.sources.join(', ')}`,
-      `_Attached as recording.webm in ZIP export._`,
-    );
+  const recs = session.recordings ?? [];
+  if (recs.length > 0) {
+    lines.push(``, `## Recordings (${recs.length})`);
+    recs.forEach((r, i) => lines.push(
+      `- #${i + 1} ${r.filename} (${Math.round(r.durationMs / 1000)}s, sources: ${r.sources.join(', ')})`,
+    ));
+    lines.push(`_Attached in ZIP export under recordings/._`);
   }
 
   return lines.join('\n');
@@ -73,8 +73,12 @@ export async function buildZip(session: Session): Promise<Blob> {
     }
   }
 
-  if (session.recording?.base64) {
-    zip.file('recording.webm', session.recording.base64, { base64: true });
+  const recs = session.recordings ?? [];
+  if (recs.length > 0) {
+    const recDir = zip.folder('recordings')!;
+    recs.forEach((r, i) => {
+      if (r.base64) recDir.file(r.filename || `recording-${i + 1}.webm`, r.base64, { base64: true });
+    });
   }
 
   return zip.generateAsync({ type: 'blob' });

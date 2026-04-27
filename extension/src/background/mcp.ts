@@ -10,15 +10,22 @@ export async function sendToMcp(session: Session, port = DEFAULT_PORT): Promise<
     }
   }
 
+  // Per-recording base64 is sent alongside as recordingsBase64[] so the server
+  // can persist binary blobs separately. Empty slots stay as '' to preserve
+  // 1:1 index correspondence with session.recordings.
+  const recordingsBase64 = (session.recordings ?? []).map((r) => r.base64 ?? '');
+  const anyRecBase64 = recordingsBase64.some((b) => b.length > 0);
+
   const payload = {
     session: {
       ...session,
       fullPageScreenshotBase64: undefined,
       annotations: session.annotations.map((a) => ({ ...a, elementScreenshotBase64: undefined })),
+      recordings: (session.recordings ?? []).map((r) => ({ ...r, base64: undefined })),
     },
     fullPageScreenshotBase64: session.fullPageScreenshotBase64 || null,
     elementScreenshots,
-    ...(session.recording?.base64 ? { recordingBase64: session.recording.base64 } : {}),
+    ...(anyRecBase64 ? { recordingsBase64 } : {}),
   };
 
   const controller = new AbortController();
