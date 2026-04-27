@@ -34,7 +34,7 @@ Annotations are typed (`task` / `bug` / `comment` / `request`) so the agent can 
 
 ## Features
 
-- **Floating sidebar** — a draggable, collapsible widget injected into any page. Position is remembered per origin.
+- **Floating sidebar** — a draggable, collapsible widget injected into any page. Position is remembered, and the on/off state survives navigation, link clicks, and new tabs (synced via `chrome.storage.local`).
 - **Element & region picks** — click any element to capture a tight crop with selector + xpath + outerHTML. Or drag a rectangle to capture an arbitrary region.
 - **Four annotation types** — `task`, `bug`, `comment`, `request`. Type each draft separately, then "Add annotations" to commit all four at once.
 - **Full-page screenshot** — opt-in checkbox. Scrolls the entire page, primes lazy-loaded content, freezes sticky headers and animations, then stitches into a single JPEG. The Send2LLM widget itself is hidden during capture so it never appears in the output.
@@ -74,11 +74,13 @@ cd Send2LLM
 # 1. Install extension + build (default target is Chrome)
 cd extension
 npm install
-npm run build            # builds dist/chrome/
+npm run build            # builds dist/chrome/ (default)
 # Or build a specific browser target:
-#   npm run build:chrome    → dist/chrome/
-#   npm run build:firefox   → dist/firefox/
-#   npm run build:edge      → dist/edge/
+#   npm run build:chrome    → dist/chrome/    (Chrome MV3)
+#   npm run build:edge      → dist/edge/      (Edge MV3)
+#   npm run build:opera     → dist/opera/     (Opera, Chromium MV3)
+#   npm run build:firefox   → dist/firefox/   (Firefox MV2)
+#   npm run build:all       → all four at once
 
 # 2. Install MCP server (auto-installs ffmpeg + whisper.cpp via Homebrew/apt)
 cd ../mcp-server
@@ -97,8 +99,16 @@ node dist/index.js
 
 **Load the extension:**
 
-- **Chrome / Edge**: open `chrome://extensions`, enable Developer mode, click "Load unpacked", pick `extension/dist/chrome` (or `dist/edge`).
-- **Firefox**: open `about:debugging#/runtime/this-firefox`, click "Load Temporary Add-on", pick `extension/dist/firefox/manifest.json`.
+| Browser | URL | Steps |
+|---|---|---|
+| **Chrome** | `chrome://extensions` | Enable *Developer mode* (top right) → *Load unpacked* → pick `extension/dist/chrome/`. |
+| **Edge** | `edge://extensions` | Toggle *Developer mode* (left side) → *Load unpacked* → pick `extension/dist/edge/`. |
+| **Opera** | `opera://extensions` | Toggle *Developer mode* (top right) → *Load unpacked* → pick `extension/dist/opera/`. (Opera ships with a separate "Install Chrome Extensions" extension that lets you also use Chrome Web Store builds, but the unpacked path is the recommended one.) |
+| **Firefox** | `about:debugging#/runtime/this-firefox` | Click *Load Temporary Add-on* → pick `extension/dist/firefox/manifest.json`. Firefox erases temporary add-ons on restart; for permanent installs sign the build via [`web-ext`](https://addons.mozilla.org/en-US/developers/) and load it as an unpacked add-on at `about:addons`. |
+
+> **Recording capabilities differ across browsers**:
+> - Chrome / Edge / Opera support **screen + microphone + tab-audio** mixing in one recording. The "Before you record" dialog walks you through the OS share-picker for each.
+> - Firefox supports **screen + microphone** but cannot capture tab audio (Chromium-only API). Audio-only recordings work fine; tab-audio toggles are no-ops.
 
 **Wire the MCP server into your agent.** Example for Claude Code — add to `~/.claude/config.json`:
 
@@ -182,11 +192,12 @@ After you annotate a page and click "Send → MCP", your agent can answer prompt
 
 ## Browsers
 
-| Browser | Manifest | Status |
-|---|---|---|
-| Chrome | MV3 | Supported |
-| Edge | MV3 | Supported |
-| Firefox | MV2 | Supported |
+| Browser | Manifest | Recording | Notes |
+|---|---|---|---|
+| Chrome | MV3 | screen + mic + tab-audio | Primary target. |
+| Edge | MV3 | screen + mic + tab-audio | Same code as Chrome; native MV3. |
+| Opera | MV3 | screen + mic + tab-audio | Reuses the Chrome manifest (Chromium-based). |
+| Firefox | MV2 | screen + mic only | No tab-audio API; UI hides the toggle. |
 
 ---
 

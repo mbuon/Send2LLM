@@ -8,6 +8,8 @@
     "build:chrome": "BROWSER=chrome vite build && BROWSER=chrome ENTRY=content vite build",
     "build:firefox": "BROWSER=firefox vite build && BROWSER=firefox ENTRY=content vite build",
     "build:edge": "BROWSER=edge vite build && BROWSER=edge ENTRY=content vite build",
+    "build:opera": "BROWSER=opera vite build && BROWSER=opera ENTRY=content vite build",
+    "build:all": "npm run build:chrome && npm run build:firefox && npm run build:edge && npm run build:opera",
     "dev:chrome": "BROWSER=chrome vite build --watch",
     "test": "vitest run",
     "test:watch": "vitest"

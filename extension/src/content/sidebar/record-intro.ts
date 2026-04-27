@@ -8,6 +8,62 @@ export function shouldShowRecordIntro(): boolean {
   }
 }
 
+type Browser = 'chrome' | 'edge' | 'opera' | 'firefox' | 'other';
+
+// Best-effort UA sniff. The extension itself is built per-target, but the
+// intro copy needs to match whatever Chromium variant happens to be hosting
+// the same dist (e.g. a Chrome-built dist running in Edge).
+function detectBrowser(): Browser {
+  const ua = navigator.userAgent;
+  if (/Edg\//.test(ua)) return 'edge';
+  if (/OPR\/|Opera/.test(ua)) return 'opera';
+  if (/Firefox\//.test(ua)) return 'firefox';
+  if (/Chrome\//.test(ua)) return 'chrome';
+  return 'other';
+}
+
+interface IntroCopy {
+  picker: string;        // What dialog appears, where
+  pickerHint: string;    // What to choose in the dialog
+  audioCheckbox: string; // The audio toggle's exact wording
+  audioFooter: string;   // Caveat about which sources carry audio
+}
+
+function copyFor(browser: Browser): IntroCopy {
+  switch (browser) {
+    case 'edge':
+      return {
+        picker: 'Edge will open a "Choose what to share" dialog.',
+        pickerHint: 'Pick the "Tab" tab and select this page (Window or Entire Screen do not carry audio).',
+        audioCheckbox: 'Tick "Share tab audio" at the bottom-left of the dialog.',
+        audioFooter: 'Edge: only Tab shares can carry audio. Window and Entire-Screen shares are silent.',
+      };
+    case 'opera':
+      return {
+        picker: 'Opera will open a "Choose what to share" dialog.',
+        pickerHint: 'Pick "Chrome Tab" (Opera reuses Chromium\'s picker) and select this page.',
+        audioCheckbox: 'Tick "Also share tab audio" before clicking Share.',
+        audioFooter: 'Opera: only Tab shares can carry audio. Window and Entire-Screen shares are silent.',
+      };
+    case 'firefox':
+      return {
+        picker: 'Firefox will show a permission prompt at the top of the page.',
+        pickerHint: 'Pick a window or screen from the dropdown, then click Allow.',
+        audioCheckbox: 'For audio, accept the separate microphone prompt - Firefox does not support tab-audio sharing.',
+        audioFooter: 'Firefox limitation: only microphone audio is recorded. Tab-audio mixing requires a Chromium-based browser.',
+      };
+    case 'chrome':
+    case 'other':
+    default:
+      return {
+        picker: 'Chrome will open a "Choose what to share" dialog.',
+        pickerHint: 'Pick the "Chrome Tab" tab at the top and select this page (Window or Entire Screen do not carry audio).',
+        audioCheckbox: 'Tick "Also share tab audio" at the bottom-left of the dialog.',
+        audioFooter: 'Chrome: only Tab shares can carry audio. Window and Entire-Screen shares are silent.',
+      };
+  }
+}
+
 function makeStep(textNodes: (string | HTMLElement)[]): HTMLLIElement {
   const li = document.createElement('li');
   for (const n of textNodes) {
@@ -62,7 +118,7 @@ export function showRecordIntro(): Promise<boolean> {
           0 1px 0 rgba(255,255,255,0.6) inset,
           0 30px 80px -10px rgba(0, 0, 0, 0.35),
           0 10px 30px -8px rgba(0, 0, 0, 0.2);
-        width: min(440px, calc(100vw - 32px));
+        width: min(460px, calc(100vw - 32px));
         max-height: calc(100vh - 48px);
         overflow-y: auto;
         padding: 22px 24px 20px;
@@ -142,31 +198,31 @@ export function showRecordIntro(): Promise<boolean> {
     title.appendChild(dot);
     title.appendChild(document.createTextNode('Before you record'));
 
+    // --- Browser-specific copy ---
+    const browser = detectBrowser();
+    const copy = copyFor(browser);
+    const browserName = ({ chrome: 'Chrome', edge: 'Edge', opera: 'Opera', firefox: 'Firefox', other: 'your browser' } as const)[browser];
+
     const lead = document.createElement('p');
     lead.className = 'lead';
-    lead.textContent = 'Send2LLM can capture screen + microphone + tab audio. Chrome asks a couple of questions — getting them right is the only way audio ends up in the file.';
+    lead.textContent = `Send2LLM can capture screen + microphone + tab audio. ${browserName} asks a couple of questions — getting them right is the only way audio ends up in the file.`;
 
     // --- Steps ---
     const steps = document.createElement('ol');
     steps.className = 'steps';
-    steps.appendChild(makeStep([
-      'Chrome will show a ', bold('share picker'), '. Choose ', bold('Chrome Tab'),
-      ' (not Window or Entire Screen) if you want tab audio.',
-    ]));
-    steps.appendChild(makeStep([
-      'In that same dialog, tick ', bold('"Also share tab audio"'),
-      '. Windows and full-screen shares can\u2019t carry audio.',
-    ]));
+    steps.appendChild(makeStep([copy.picker]));
+    steps.appendChild(makeStep([copy.pickerHint]));
+    steps.appendChild(makeStep([copy.audioCheckbox]));
     steps.appendChild(makeStep([
       'If this is your first time, allow ', bold('microphone'), ' access when prompted.',
     ]));
     steps.appendChild(makeStep([
-      'Click ', bold('Stop'), ' in the widget when you\u2019re done. The recording appears inline and you can play it back.',
+      'Click ', bold('Stop'), ' in the floating REC pill when you are done. The recording appears inline and you can play it back.',
     ]));
 
     const tip = document.createElement('div');
     tip.className = 'tip';
-    tip.textContent = 'Tip: "Screen" in the checkboxes means the shared picture. "Tab-audio" is the selected tab\u2019s sound. "Microphone" is your voice.';
+    tip.textContent = copy.audioFooter;
 
     // --- Footer ---
     const footer = document.createElement('div');
@@ -178,7 +234,7 @@ export function showRecordIntro(): Promise<boolean> {
     dontShowInput.type = 'checkbox';
     dontShowInput.id = 's2l-dont-show';
     dontShowLabel.appendChild(dontShowInput);
-    dontShowLabel.appendChild(document.createTextNode(' Don\u2019t show this again'));
+    dontShowLabel.appendChild(document.createTextNode(' Do not show this again'));
 
     const actions = document.createElement('div');
     actions.className = 'actions';

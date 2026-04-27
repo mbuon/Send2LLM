@@ -7,6 +7,7 @@ import { getConsoleLogs } from '../console-capture.js';
 import { startRecording, stopRecording } from '../recorder.js';
 import { renderAnnotationList } from './annotation-list.js';
 import { renderRecorderBar } from './recorder-bar.js';
+import { shouldShowRecordIntro, showRecordIntro } from './record-intro.js';
 
 type AnnotationType = Annotation['type'];
 type RecordingSource = 'screen' | 'microphone' | 'tab-audio';
@@ -25,7 +26,26 @@ interface DraftState {
 }
 
 const POS_KEY = 's2l-sidebar-pos';
+const ENABLED_KEY = 's2l-sidebar-enabled';
 const ORDER: AnnotationType[] = ['task', 'bug', 'comment', 'request'];
+
+// Persist the user's sidebar-on / sidebar-off intent across page loads and
+// across tabs. chrome.storage.local survives navigation; localStorage would
+// be per-origin, which means the sidebar would re-disappear when the user
+// clicks a link to a different domain. Best-effort — extension contexts
+// without storage access fall through silently.
+async function setEnabledFlag(enabled: boolean): Promise<void> {
+  try {
+    await chrome.storage?.local?.set({ [ENABLED_KEY]: enabled });
+  } catch { /* ignore */ }
+}
+
+async function loadEnabledFlag(): Promise<boolean> {
+  try {
+    const v = await chrome.storage?.local?.get?.(ENABLED_KEY);
+    return Boolean(v?.[ENABLED_KEY]);
+  } catch { return false; }
+}
 
 let sidebarHost: HTMLElement | null = null;
 let shadow: ShadowRoot | null = null;
@@ -50,6 +70,10 @@ let lastCapture: PickedCapture | null = null;
 
 export function mountSidebar(): void {
   if (sidebarHost) return;
+  // The host element ID is sometimes left behind by an extension reload —
+  // remove any stale node before mounting so we don't end up with two.
+  const stale = document.getElementById('s2l-sidebar-host');
+  if (stale) stale.remove();
   sidebarHost = document.createElement('div');
   sidebarHost.id = 's2l-sidebar-host';
   shadow = sidebarHost.attachShadow({ mode: 'open' });
@@ -70,7 +94,46 @@ export function unmountSidebar(): void {
 }
 
 export function toggleSidebar(): void {
-  if (sidebarHost) unmountSidebar(); else mountSidebar();
+  if (sidebarHost) {
+    unmountSidebar();
+    void setEnabledFlag(false);
+  } else {
+    mountSidebar();
+    void setEnabledFlag(true);
+  }
+}
+
+// Called by the content script on every page load. If the user previously
+// turned the sidebar on, re-mount it automatically so it survives clicking
+// links and opening new tabs. The body may not exist yet at document_start;
+// wait for it and retry.
+export async function ensureSidebarFromStorage(): Promise<void> {
+  const enabled = await loadEnabledFlag();
+  if (!enabled) return;
+  if (document.body) {
+    mountSidebar();
+    return;
+  }
+  // Body not parsed yet (document_start). Listen for it.
+  const onReady = (): void => {
+    document.removeEventListener('DOMContentLoaded', onReady);
+    if (!sidebarHost) mountSidebar();
+  };
+  document.addEventListener('DOMContentLoaded', onReady, { once: true });
+}
+
+// Subscribe to storage changes so toggling the sidebar in one tab updates
+// every other open tab in real time. (E.g. user closes the sidebar with X
+// here → the new tab they opened earlier also closes its sidebar.)
+export function watchSidebarFlag(): void {
+  try {
+    chrome.storage?.onChanged?.addListener((changes, area) => {
+      if (area !== 'local' || !(ENABLED_KEY in changes)) return;
+      const next = Boolean(changes[ENABLED_KEY].newValue);
+      if (next && !sidebarHost) mountSidebar();
+      if (!next && sidebarHost) unmountSidebar();
+    });
+  } catch { /* ignore */ }
 }
 
 function clearElement(el: Element): void {
@@ -492,7 +555,10 @@ function togglePickMode(): void {
     startPicker(async (el) => {
       pickingMode = false;
       const info = getElementInfo(el);
-      const elementScreenshotBase64 = await cropBoundingBox(info.boundingBox);
+      // Pad element picks so the screenshot includes a sliver of surrounding
+      // background — picking text-only or transparent elements would
+      // otherwise crop to a black or white rectangle.
+      const elementScreenshotBase64 = await cropBoundingBox(info.boundingBox, 8);
       const cap: PickedCapture = {
         selector: info.selector, xpath: info.xpath, elementHTML: info.elementHTML,
         boundingBox: info.boundingBox, elementScreenshotBase64,
@@ -545,13 +611,30 @@ function toggleRegionMode(): void {
 // Crop the picked element/region using a single-frame viewport capture only.
 // We never trigger the slow scroll-and-stitch full-page capture during pick —
 // that runs once at Send → MCP time if the user opted in to "Grab full page".
-async function cropBoundingBox(box: BoundingBox): Promise<string> {
+//
+// `expand` adds CSS-pixel padding around the box before cropping so the
+// element's surrounding background colour and a few pixels of context are
+// included. Without it, picking an element that is just a glyph or a
+// transparent button reads as a black/white square in the screenshot.
+// Region picks pass expand=0 because the user already drew the area.
+async function cropBoundingBox(box: BoundingBox, expand = 0): Promise<string> {
   const viewportRes = await chrome.runtime.sendMessage({ type: 'CAPTURE_VIEWPORT' });
   const viewportBase64 = viewportRes?.base64 ?? '';
   if (!viewportBase64) return '';
+  // Scale the padding for very small or very large elements: at most 12px,
+  // at least 4px, otherwise 8% of the smaller dimension. The offscreen
+  // canvas clamps the crop to the image bounds so over-shooting the
+  // viewport edge is safe — it just produces a tighter crop.
+  let pad = 0;
+  if (expand > 0) {
+    const minDim = Math.min(box.width, box.height);
+    pad = Math.max(4, Math.min(12, Math.round(minDim * 0.08)));
+  }
   const viewportBox: BoundingBox = {
-    x: box.x - window.scrollX, y: box.y - window.scrollY,
-    width: box.width, height: box.height,
+    x: box.x - window.scrollX - pad,
+    y: box.y - window.scrollY - pad,
+    width: box.width + pad * 2,
+    height: box.height + pad * 2,
   };
   const cropRes = await chrome.runtime.sendMessage({
     type: 'CROP_ELEMENT', fullPageBase64: viewportBase64, boundingBox: viewportBox,
@@ -656,6 +739,13 @@ async function handleSendToMcp(): Promise<void> {
 
 async function handleStartRecording(sources: RecordingSource[]): Promise<void> {
   selectedSources = new Set(sources);
+  // Show the per-browser intro modal first time around so the user knows
+  // what to click in the OS share-picker. Dismissed-state is sticky in
+  // localStorage; the user can re-enable it from the welcome dialog.
+  if (shouldShowRecordIntro()) {
+    const ok = await showRecordIntro();
+    if (!ok) return;
+  }
   try {
     await startRecording(sources);
   } catch (err) {

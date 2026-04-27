@@ -2,8 +2,14 @@ import { defineConfig } from 'vite';
 import { resolve } from 'path';
 import { copyFileSync, mkdirSync, existsSync } from 'fs';
 
-const browser = (process.env.BROWSER ?? 'chrome') as 'chrome' | 'firefox' | 'edge';
+type BrowserTarget = 'chrome' | 'firefox' | 'edge' | 'opera';
+const browser = (process.env.BROWSER ?? 'chrome') as BrowserTarget;
 const isFirefox = browser === 'firefox';
+// Opera, Brave, Vivaldi all run Chromium MV3 — they accept the Chrome
+// manifest verbatim. We still emit a separate dist/opera/ folder so the
+// user can load-unpacked from a recognisable path, but the manifest is
+// chrome's.
+const manifestSource = browser === 'opera' ? 'chrome' : browser;
 // When ENTRY=content, build only the content script as a self-contained IIFE
 // (classic script). Other entries build as ESM modules.
 const entry = (process.env.ENTRY ?? 'main') as 'main' | 'content';
@@ -60,7 +66,7 @@ export default defineConfig({
         if (entry !== 'main') return;
 
         copyFileSync(
-          resolve(__dirname, `manifests/manifest.${browser}.json`),
+          resolve(__dirname, `manifests/manifest.${manifestSource}.json`),
           resolve(outDir, 'manifest.json'),
         );
 
