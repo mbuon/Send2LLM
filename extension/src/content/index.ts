@@ -1,5 +1,5 @@
 import { startConsoleCapture } from './console-capture.js';
-import { toggleSidebar, ensureSidebarFromStorage, watchSidebarFlag } from './sidebar/sidebar.js';
+import { toggleSidebar } from './sidebar/sidebar.js';
 
 // After the extension reloads, message listeners from the previous content-script
 // instance stay attached to the page until navigation. Each instance stamps
@@ -12,11 +12,9 @@ const CURRENT_EPOCH = epochHolder.__send2llmEpoch;
 
 startConsoleCapture();
 
-// Restore the sidebar on every page load if the user previously turned it
-// on, so navigating links and opening new tabs doesn't lose the widget.
-// And subscribe to the toggle flag so cross-tab toggles propagate.
-void ensureSidebarFromStorage();
-watchSidebarFlag();
+// The sidebar is purely opt-in: the toolbar icon click is the ONLY thing
+// that mounts it. We do NOT auto-restore on page load — that turned the
+// widget into a permanent overlay the user could not get rid of.
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (epochHolder.__send2llmEpoch !== CURRENT_EPOCH) return;

@@ -27,7 +27,6 @@ interface DraftState {
 }
 
 const POS_KEY = 's2l-sidebar-pos';
-const ENABLED_KEY = 's2l-sidebar-enabled';
 const PENDING_REC_KEY = 's2l-pending-recording';
 const SCALE_KEY = 's2l-sidebar-scale';
 const ORDER: AnnotationType[] = ['task', 'bug', 'comment', 'request'];
@@ -53,24 +52,6 @@ async function saveScale(): Promise<void> {
   try {
     await chrome.storage?.local?.set?.({ [SCALE_KEY]: currentScale });
   } catch { /* ignore */ }
-}
-
-// Persist the user's sidebar-on / sidebar-off intent across page loads and
-// across tabs. chrome.storage.local survives navigation; localStorage would
-// be per-origin, which means the sidebar would re-disappear when the user
-// clicks a link to a different domain. Best-effort — extension contexts
-// without storage access fall through silently.
-async function setEnabledFlag(enabled: boolean): Promise<void> {
-  try {
-    await chrome.storage?.local?.set({ [ENABLED_KEY]: enabled });
-  } catch { /* ignore */ }
-}
-
-async function loadEnabledFlag(): Promise<boolean> {
-  try {
-    const v = await chrome.storage?.local?.get?.(ENABLED_KEY);
-    return Boolean(v?.[ENABLED_KEY]);
-  } catch { return false; }
 }
 
 let sidebarHost: HTMLElement | null = null;
@@ -181,53 +162,9 @@ export function unmountSidebar(): void {
 export function toggleSidebar(): void {
   if (sidebarHost) {
     unmountSidebar();
-    void setEnabledFlag(false);
   } else {
     mountSidebar();
-    void setEnabledFlag(true);
   }
-}
-
-// Called by the content script on every page load. If the user previously
-// turned the sidebar on, re-mount it automatically so it survives clicking
-// links and opening new tabs. The body may not exist yet at document_start;
-// wait for it and retry.
-export async function ensureSidebarFromStorage(): Promise<void> {
-  const enabled = await loadEnabledFlag();
-  if (!enabled) return;
-  if (document.body) {
-    mountSidebar();
-    return;
-  }
-  // Body not parsed yet (document_start). Listen for it.
-  const onReady = (): void => {
-    document.removeEventListener('DOMContentLoaded', onReady);
-    if (!sidebarHost) mountSidebar();
-  };
-  document.addEventListener('DOMContentLoaded', onReady, { once: true });
-}
-
-// Subscribe to storage changes so toggling the sidebar in one tab updates
-// every other open tab in real time. (E.g. user closes the sidebar with X
-// here → the new tab they opened earlier also closes its sidebar.)
-export function watchSidebarFlag(): void {
-  try {
-    chrome.storage?.onChanged?.addListener((changes, area) => {
-      if (area !== 'local') return;
-      if (ENABLED_KEY in changes) {
-        const next = Boolean(changes[ENABLED_KEY].newValue);
-        if (next && !sidebarHost) mountSidebar();
-        if (!next && sidebarHost) unmountSidebar();
-      }
-      if (SCALE_KEY in changes && sidebarHost) {
-        const next = changes[SCALE_KEY].newValue as ScaleStep | undefined;
-        if (next === 'sm' || next === 'md' || next === 'lg') {
-          currentScale = next;
-          renderSidebar();
-        }
-      }
-    });
-  } catch { /* ignore */ }
 }
 
 function clearElement(el: Element): void {
@@ -676,19 +613,9 @@ function renderRecordingPreview(): void {
   video.className = 's2l-rec-preview-video';
   video.controls = true;
   video.src = `data:video/webm;base64,${pendingRecording.base64}`;
-  video.title = 'Double-click to open in default video player';
-  // Double-click opens the webm in the OS default video player. The user's
-  // OS still owns the file association — Send2LLM only writes the file and
-  // asks the browser to hand it off via chrome.downloads.open().
-  video.addEventListener('dblclick', () => {
-    if (!pendingRecording) return;
-    chrome.runtime.sendMessage({
-      type: 'OPEN_IN_DEFAULT_APP',
-      base64: pendingRecording.base64,
-      mimeType: 'video/webm',
-      filename: `Send2LLM/recording-${Date.now()}.webm`,
-    });
-  });
+  // The native HTMLVideoElement controls (play, scrub, fullscreen) cover
+  // every realistic playback need; no dblclick handler is added so the user
+  // can double-click to fullscreen as Chrome's default behaviour does.
   container.appendChild(headerRow);
   container.appendChild(video);
 }
@@ -902,11 +829,9 @@ async function handleSendToMcp(): Promise<void> {
   lastCapture = null;
   await clearPendingRecordingStorage();
   // Dismiss the widget after the user acknowledges the success alert.
-  // mountSidebar() / the toolbar icon click brings it back. The persisted
-  // "enabled" flag is also cleared so navigating to a new tab won't auto-
-  // mount it until the user explicitly opens it again.
+  // The toolbar icon click brings it back. The widget is per-tab and never
+  // auto-mounts on page load, so closing it here just closes it.
   unmountSidebar();
-  void setEnabledFlag(false);
 }
 
 async function handleStartRecording(sources: RecordingSource[]): Promise<void> {

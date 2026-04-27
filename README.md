@@ -28,18 +28,20 @@ calls MCP tools to pull exactly the context it needs:
 Agent executes your instructions with full visual + audio context
 ```
 
-Annotations are typed (`task` / `bug` / `comment` / `request`) so the agent can filter by intent. Recordings are saved as `.webm` on disk; the `transcribe_recording` tool runs `whisper.cpp` locally to produce text, because LLMs can't ingest webm directly. Everything lives on your machine.
+Annotations are typed (`task` / `bug` / `comment` / `request`) so the agent can filter by intent. Each draft tab has its own composer, but a single Pick Element / Pick Region applies to all four drafts at once — fill out two or three types in different tabs, click **Add annotations**, and they all commit sharing the same screenshot. Recordings are saved as `.webm` on disk; the MCP server auto-transcribes each one in the background with `whisper.cpp` and patches the session row when the text is ready. Everything lives on your machine.
+
+After **Send → MCP** succeeds, the widget dismisses itself. Reopen via the toolbar icon when you want to start a new session — the previous annotations, drafts, and recording preview are all cleared so they cannot be sent twice by accident.
 
 ---
 
 ## Features
 
-- **Floating sidebar** — a draggable, collapsible widget injected into any page. Position is remembered, and the on/off state survives navigation, link clicks, and new tabs (synced via `chrome.storage.local`).
-- **Element & region picks** — click any element to capture a tight crop with selector + xpath + outerHTML. Or drag a rectangle to capture an arbitrary region. Double-click any thumbnail in the sidebar to open the screenshot full-size in your OS default image viewer; double-click the recording preview to open the webm in your default video player.
+- **Floating sidebar** — a draggable, collapsible widget injected into the active tab. Strictly opt-in: pages never auto-mount it. Click the toolbar icon to open, the X to close. Three sizes (a− / A+ in the header) persist across tabs.
+- **Element & region picks** — click any element to capture a tight crop with selector + xpath + outerHTML. Or drag a rectangle to capture an arbitrary region. Click any thumbnail in the sidebar to view the full-size screenshot in a new browser tab.
 - **Four annotation types** — `task`, `bug`, `comment`, `request`. Type each draft separately, then "Add annotations" to commit all four at once.
 - **Full-page screenshot** — opt-in checkbox. Scrolls the entire page, primes lazy-loaded content, freezes sticky headers and animations, then stitches into a single JPEG. The Send2LLM widget itself is hidden during capture so it never appears in the output.
 - **Console log capture** — content script injects at `document_start` and records all `console.*` output from page load onward.
-- **Screen / mic / tab-audio recording** — per-source toggles, MediaRecorder running in the offscreen document (Chrome/Edge) or background page (Firefox). Multiple recordings per session.
+- **Screen / mic / tab-audio recording** — per-source toggles, MediaRecorder running in the offscreen document (Chrome / Edge / Opera) or background page (Firefox). The encoder uses `video/webm;codecs=vp9,opus` so audio (microphone + tab audio) is actually muxed into the file. While recording, the full sidebar collapses to a small floating REC pill (pulsing dot + tabular-numerals timer + Stop button) so it stays out of the way of whatever is being captured. Click the inline `<video>` controls to play back; the recording also survives navigation because the MediaRecorder lives in the persistent offscreen document.
 - **sessionStorage capture** — full key-value snapshot per send.
 - **Local-only data** — sessions live in `~/.send2llm/`. SQLite for metadata + console logs, filesystem for binary assets (PNG, JPEG, webm).
 - **MCP-native** — your AI agent reads the session through MCP tools, not via injected web UI. Survives page reloads, browser restarts, agent restarts.

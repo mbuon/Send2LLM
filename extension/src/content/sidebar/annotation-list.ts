@@ -47,9 +47,10 @@ export function renderAnnotationList(
     headerRow.appendChild(del);
     item.appendChild(headerRow);
 
-    // Inline thumbnail of the picked element or region. Double-click opens
-    // the PNG in the OS default image viewer (saves to Downloads first via
-    // chrome.downloads, then asks the OS to open it in the default app).
+    // Inline thumbnail of the picked element or region. Click opens the PNG
+    // full-size in a new browser tab (no save dialog, no download). The
+    // user gets a normal "View Image" tab they can pinch-zoom or right-click
+    // to save if they want.
     if (ann.elementScreenshotBase64) {
       const thumbWrap = document.createElement('div');
       thumbWrap.className = 's2l-ann-thumb-wrap';
@@ -57,16 +58,21 @@ export function renderAnnotationList(
       thumb.className = 's2l-ann-thumb';
       thumb.src = `data:image/png;base64,${ann.elementScreenshotBase64}`;
       thumb.alt = `Annotation #${ann.number}`;
-      thumb.title = 'Double-click to open in default image viewer';
-      thumb.addEventListener('dblclick', () => {
-        const safeNote = ann.note.slice(0, 30).replace(/[^a-z0-9 ]/gi, '_').trim() || 'annotation';
-        const filename = `Send2LLM/element-${ann.number}-${safeNote}.png`;
-        chrome.runtime.sendMessage({
-          type: 'OPEN_IN_DEFAULT_APP',
-          base64: ann.elementScreenshotBase64,
-          mimeType: 'image/png',
-          filename,
-        });
+      thumb.title = 'Click to view full-size in a new tab';
+      thumb.style.cursor = 'zoom-in';
+      thumb.addEventListener('click', () => {
+        // Build a blob and open via blob URL — Chrome happily renders
+        // image/png blobs in a tab, and unlike data: URLs there is no risk
+        // of the browser refusing to navigate to an oversized data URL.
+        const bytes = atob(ann.elementScreenshotBase64);
+        const buf = new Uint8Array(bytes.length);
+        for (let i = 0; i < bytes.length; i++) buf[i] = bytes.charCodeAt(i);
+        const blob = new Blob([buf], { type: 'image/png' });
+        const url = URL.createObjectURL(blob);
+        window.open(url, '_blank', 'noopener,noreferrer');
+        // Revoke after a delay — Chrome needs the URL alive long enough to
+        // navigate the new tab to it. 60s is plenty.
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
       });
       thumbWrap.appendChild(thumb);
       item.appendChild(thumbWrap);
