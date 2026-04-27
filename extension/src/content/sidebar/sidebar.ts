@@ -6,26 +6,47 @@ import { startRegionPicker, stopRegionPicker } from '../region-picker.js';
 import { getConsoleLogs } from '../console-capture.js';
 import { startRecording, stopRecording } from '../recorder.js';
 import { renderAnnotationList } from './annotation-list.js';
-import { showPopover } from './popover.js';
 import { renderRecorderBar } from './recorder-bar.js';
+
+type AnnotationType = Annotation['type'];
+type RecordingSource = 'screen' | 'microphone' | 'tab-audio';
+
+interface PickedCapture {
+  selector: string;
+  xpath?: string;
+  elementHTML: string;
+  boundingBox: BoundingBox;
+  elementScreenshotBase64: string;
+}
+
+interface DraftState {
+  note: string;
+  capture?: PickedCapture;
+}
+
+const POS_KEY = 's2l-sidebar-pos';
+const ORDER: AnnotationType[] = ['task', 'bug', 'comment', 'request'];
 
 let sidebarHost: HTMLElement | null = null;
 let shadow: ShadowRoot | null = null;
 let annotations: Annotation[] = [];
 let pickingMode = false;
 let regionPickingMode = false;
-let pendingRecording: { base64: string; durationMs: number; sources: ('screen' | 'microphone' | 'tab-audio')[] } | null = null;
+let pendingRecording: { base64: string; durationMs: number; sources: RecordingSource[] } | null = null;
 let isRecording = false;
 let recordingStart = 0;
 let recordingInterval: ReturnType<typeof setInterval> | null = null;
-let selectedSources = new Set<'screen' | 'microphone' | 'tab-audio'>(['screen']);
+let selectedSources = new Set<RecordingSource>(['screen']);
 let fullPageBase64 = '';
-
-type AnnotationType = Annotation['type'];
-type AnnotationTabId = AnnotationType | 'all';
-
 let grabFullPage = false;
-let activeTab: AnnotationTabId = 'all';
+let activeTab: AnnotationType = 'task';
+let drafts: Record<AnnotationType, DraftState> = {
+  task: { note: '' }, bug: { note: '' }, comment: { note: '' }, request: { note: '' },
+};
+// `lastCapture` is the most recent pick from any draft. When the user fills
+// drafts in tabs that don't have their own pick, the commit step attaches
+// `lastCapture` to those drafts so a single pick can serve multiple types.
+let lastCapture: PickedCapture | null = null;
 
 export function mountSidebar(): void {
   if (sidebarHost) return;
@@ -37,29 +58,19 @@ export function mountSidebar(): void {
 }
 
 export function unmountSidebar(): void {
-  // Stop any active modal interactions
   stopPicker();
   stopRegionPicker();
   pickingMode = false;
   regionPickingMode = false;
-
-  // Tear down recording timer (the recording itself is not silently killed —
-  // the user must explicitly Stop. But the timer references a stale shadow.)
   if (recordingInterval) { clearInterval(recordingInterval); recordingInterval = null; }
-
-  // Clean up any orphan popover / region highlight created via document.body
-  document.getElementById('s2l-popover-host')?.remove();
   document.getElementById('s2l-region-highlight')?.remove();
-
   sidebarHost?.remove();
   sidebarHost = null;
   shadow = null;
-  // Note: we intentionally KEEP `annotations` so a user closing the sidebar
-  // accidentally does not lose work. They are cleared on a fresh page load.
 }
 
 export function toggleSidebar(): void {
-  if (sidebarHost) { unmountSidebar(); } else { mountSidebar(); }
+  if (sidebarHost) unmountSidebar(); else mountSidebar();
 }
 
 function clearElement(el: Element): void {
@@ -71,7 +82,26 @@ function setSidebarVisible(visible: boolean): void {
   sidebarHost.style.display = visible ? '' : 'none';
 }
 
-const POS_KEY = 's2l-sidebar-pos';
+// Keep the sidebar inside the viewport: clamp its height to (viewport - padding)
+// minus the saved top, so the footer (Export + Send → MCP) is always visible.
+// Called on every render and on window resize.
+function applyAutoSize(sidebar: HTMLElement): void {
+  const top = parseFloat(sidebar.style.top || '80') || 80;
+  const padding = 12;
+  const available = Math.max(220, window.innerHeight - top - padding);
+  sidebar.style.maxHeight = `${available}px`;
+}
+
+let resizeListenerAttached = false;
+function attachResizeListener(): void {
+  if (resizeListenerAttached) return;
+  resizeListenerAttached = true;
+  window.addEventListener('resize', () => {
+    if (!shadow) return;
+    const sidebar = shadow.getElementById('s2l-sidebar') as HTMLElement | null;
+    if (sidebar) applyAutoSize(sidebar);
+  });
+}
 
 function applySavedPosition(sidebar: HTMLElement): void {
   try {
@@ -79,10 +109,7 @@ function applySavedPosition(sidebar: HTMLElement): void {
     if (!raw) return;
     const parsed = JSON.parse(raw);
     if (typeof parsed?.left !== 'number' || typeof parsed?.top !== 'number') return;
-    // Clamp to current viewport so a sidebar saved on a wide monitor isn't
-    // stuck off-screen on a narrow one.
-    const minVisible = 80;
-    const left = Math.max(0, Math.min(window.innerWidth - minVisible, parsed.left));
+    const left = Math.max(0, Math.min(window.innerWidth - 80, parsed.left));
     const top = Math.max(0, Math.min(window.innerHeight - 40, parsed.top));
     sidebar.style.left = `${left}px`;
     sidebar.style.top = `${top}px`;
@@ -93,190 +120,293 @@ function applySavedPosition(sidebar: HTMLElement): void {
 function onDragMouseDown(e: MouseEvent): void {
   if ((e.target as HTMLElement).closest('button')) return;
   if (!shadow) return;
-  const sidebar = shadow.getElementById('s2l-sidebar') as HTMLElement | null;
+  // Drag the sidebar OR the recording pill — whichever is currently rendered.
+  const sidebar = (shadow.getElementById('s2l-sidebar')
+    ?? shadow.getElementById('s2l-rec-pill')) as HTMLElement | null;
   if (!sidebar) return;
-
   const rect = sidebar.getBoundingClientRect();
   const offsetX = e.clientX - rect.left;
   const offsetY = e.clientY - rect.top;
   sidebar.classList.add('dragging');
   sidebar.style.right = 'auto';
   e.preventDefault();
-
   const onMove = throttled((ev: MouseEvent): void => {
-    // Recompute width every frame in case the sidebar resized (collapse/expand)
     const liveRect = sidebar.getBoundingClientRect();
     const maxLeft = Math.max(0, window.innerWidth - liveRect.width);
     const maxTop = Math.max(0, window.innerHeight - 40);
-    const left = Math.max(0, Math.min(maxLeft, ev.clientX - offsetX));
-    const top = Math.max(0, Math.min(maxTop, ev.clientY - offsetY));
-    sidebar.style.left = `${left}px`;
-    sidebar.style.top = `${top}px`;
+    sidebar.style.left = `${Math.max(0, Math.min(maxLeft, ev.clientX - offsetX))}px`;
+    sidebar.style.top = `${Math.max(0, Math.min(maxTop, ev.clientY - offsetY))}px`;
   }, 16);
-
   const onUp = (): void => {
     sidebar.classList.remove('dragging');
     window.removeEventListener('mousemove', onMove);
     window.removeEventListener('mouseup', onUp);
     try {
       localStorage.setItem(POS_KEY, JSON.stringify({
-        left: parseFloat(sidebar.style.left),
-        top: parseFloat(sidebar.style.top),
+        left: parseFloat(sidebar.style.left), top: parseFloat(sidebar.style.top),
       }));
     } catch { /* ignore */ }
   };
-
   window.addEventListener('mousemove', onMove);
   window.addEventListener('mouseup', onUp);
 }
 
-function renderSidebar(): void {
+function renderRecordingPill(): void {
   if (!shadow) return;
-
   clearElement(shadow as unknown as Element);
 
-  // Stylesheet link
   const link = document.createElement('link');
   link.rel = 'stylesheet';
   link.href = chrome.runtime.getURL('content/sidebar/sidebar.css');
   shadow.appendChild(link);
 
-  // Root sidebar div
+  const pill = document.createElement('div');
+  pill.id = 's2l-rec-pill';
+  applySavedPosition(pill);
+
+  const dot = document.createElement('span');
+  dot.className = 's2l-rec-pill-dot';
+  dot.textContent = '●';
+
+  const timer = document.createElement('span');
+  timer.className = 's2l-rec-pill-timer';
+  timer.id = 's2l-rec-pill-timer';
+  const initialMs = isRecording ? Date.now() - recordingStart : 0;
+  timer.textContent = formatRecTime(initialMs);
+
+  const stopBtn = document.createElement('button');
+  stopBtn.className = 's2l-rec-pill-stop';
+  stopBtn.title = 'Stop recording';
+  stopBtn.setAttribute('aria-label', 'Stop recording');
+  stopBtn.textContent = '■';
+  stopBtn.addEventListener('click', handleStopRecording);
+
+  pill.addEventListener('mousedown', onDragMouseDown);
+  pill.appendChild(dot);
+  pill.appendChild(timer);
+  pill.appendChild(stopBtn);
+  shadow.appendChild(pill);
+}
+
+function formatRecTime(ms: number): string {
+  const seconds = Math.floor(ms / 1000);
+  const mm = String(Math.floor(seconds / 60)).padStart(2, '0');
+  const ss = String(seconds % 60).padStart(2, '0');
+  return `${mm}:${ss}`;
+}
+
+function renderSidebar(): void {
+  if (!shadow) return;
+
+  // While recording, swap the sidebar for a tiny floating REC pill so the
+  // full UI doesn't sit in the way of whatever the user is recording.
+  if (isRecording) {
+    renderRecordingPill();
+    return;
+  }
+
+  clearElement(shadow as unknown as Element);
+
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = chrome.runtime.getURL('content/sidebar/sidebar.css');
+  shadow.appendChild(link);
+
   const sidebar = document.createElement('div');
   sidebar.id = 's2l-sidebar';
   applySavedPosition(sidebar);
+  applyAutoSize(sidebar);
+  attachResizeListener();
 
-  // --- Header ---
+  // ----- Header -----
   const header = document.createElement('div');
   header.className = 's2l-header';
-
-  const title = document.createElement('span');
+  const title = document.createElement('div');
   title.className = 's2l-title';
   const dot = document.createElement('span');
   dot.className = 's2l-title-dot';
-  const label = document.createElement('span');
-  label.textContent = 'Send2LLM';
+  const titleText = document.createElement('div');
+  titleText.className = 's2l-title-text';
+  const titleMain = document.createElement('div');
+  titleMain.className = 's2l-title-main';
+  titleMain.textContent = 'Send2LLM';
+  const titleSub = document.createElement('div');
+  titleSub.className = 's2l-title-sub';
+  titleSub.textContent = 'by Massimo Buonaiuto';
+  titleText.appendChild(titleMain);
+  titleText.appendChild(titleSub);
   title.appendChild(dot);
-  title.appendChild(label);
-
+  title.appendChild(titleText);
   header.addEventListener('mousedown', onDragMouseDown);
 
   const headerActions = document.createElement('div');
   headerActions.className = 's2l-header-actions';
-
   const collapseBtn = document.createElement('button');
   collapseBtn.className = 's2l-btn-icon';
-  collapseBtn.id = 's2l-collapse-btn';
   collapseBtn.title = 'Collapse';
-  collapseBtn.textContent = '\u2212';
+  collapseBtn.textContent = '−';
   collapseBtn.addEventListener('click', () => {
     shadow!.getElementById('s2l-sidebar')!.classList.toggle('collapsed');
   });
-
   const closeBtn = document.createElement('button');
   closeBtn.className = 's2l-btn-icon';
-  closeBtn.id = 's2l-close-btn';
   closeBtn.title = 'Close';
-  closeBtn.textContent = '\u2715';
+  closeBtn.textContent = '✕';
   closeBtn.addEventListener('click', unmountSidebar);
-
   headerActions.appendChild(collapseBtn);
   headerActions.appendChild(closeBtn);
   header.appendChild(title);
   header.appendChild(headerActions);
 
-  // --- Toolbar ---
+  // ----- Type-selector row (TASK / BUG / COMMENT / REQUEST) -----
+  const typeRow = document.createElement('div');
+  typeRow.className = 's2l-type-row';
+  for (const t of ORDER) {
+    const tBtn = document.createElement('button');
+    tBtn.className = `s2l-type-btn${activeTab === t ? ' selected' : ''}`;
+    tBtn.dataset.type = t;
+    tBtn.textContent = t.toUpperCase();
+    tBtn.addEventListener('click', () => { activeTab = t; renderSidebar(); });
+    typeRow.appendChild(tBtn);
+  }
+
+  // ----- Inline composer -----
+  const composer = document.createElement('div');
+  composer.className = 's2l-composer';
+  {
+    const draft = drafts[activeTab];
+    // Show thumbnail: prefer this draft's own pick, otherwise the most recent
+    // pick from any draft (will be applied to this annotation on Add).
+    const previewCapture = draft.capture ?? lastCapture ?? null;
+    if (previewCapture?.elementScreenshotBase64) {
+      const thumbWrap = document.createElement('div');
+      thumbWrap.className = 's2l-draft-thumb-wrap';
+      if (!draft.capture) thumbWrap.classList.add('s2l-draft-thumb-shared');
+      const thumb = document.createElement('img');
+      thumb.className = 's2l-draft-thumb';
+      thumb.src = `data:image/png;base64,${previewCapture.elementScreenshotBase64}`;
+      thumb.alt = 'Captured';
+      const caption = document.createElement('div');
+      caption.className = 's2l-draft-thumb-caption';
+      const isRegion = previewCapture.selector.startsWith('region(');
+      caption.textContent = draft.capture
+        ? (isRegion ? 'Region captured' : `Element: ${previewCapture.selector || '(no selector)'}`)
+        : (isRegion ? 'Shared region (applies on Add)' : 'Shared element (applies on Add)');
+      const clearCap = document.createElement('button');
+      clearCap.className = 's2l-draft-thumb-clear';
+      clearCap.title = draft.capture ? 'Remove capture from this note' : 'Dismiss shared capture';
+      clearCap.textContent = '✕';
+      clearCap.addEventListener('click', () => {
+        if (drafts[activeTab].capture) drafts[activeTab].capture = undefined;
+        else lastCapture = null;
+        renderSidebar();
+      });
+      thumbWrap.appendChild(thumb);
+      thumbWrap.appendChild(caption);
+      thumbWrap.appendChild(clearCap);
+      composer.appendChild(thumbWrap);
+    }
+
+    const textarea = document.createElement('textarea');
+    textarea.className = 's2l-note-input';
+    textarea.id = 's2l-draft-note';
+    textarea.placeholder = `Describe this ${activeTab}…`;
+    textarea.value = draft.note;
+    textarea.addEventListener('input', () => { drafts[activeTab].note = textarea.value; });
+    textarea.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey)) {
+        ev.preventDefault();
+        drafts[activeTab].note = textarea.value;
+        commitDraft();
+      }
+    });
+    composer.appendChild(textarea);
+
+    const composerActions = document.createElement('div');
+    composerActions.className = 's2l-composer-actions';
+    const clearBtn = document.createElement('button');
+    clearBtn.className = 's2l-btn-cancel';
+    clearBtn.textContent = 'Clear';
+    clearBtn.addEventListener('click', clearAllDrafts);
+    const addBtn = document.createElement('button');
+    addBtn.className = 's2l-btn-add';
+    addBtn.textContent = 'Add annotations';
+    addBtn.addEventListener('click', commitDraft);
+    composerActions.appendChild(clearBtn);
+    composerActions.appendChild(addBtn);
+    composer.appendChild(composerActions);
+  }
+
+  // ----- Pick toolbar -----
   const toolbar = document.createElement('div');
   toolbar.className = 's2l-toolbar';
-
   const pickBtn = document.createElement('button');
   pickBtn.className = `s2l-btn${pickingMode ? ' active' : ''}`;
-  pickBtn.id = 's2l-pick-btn';
   pickBtn.textContent = 'Pick Element';
   pickBtn.addEventListener('click', togglePickMode);
   toolbar.appendChild(pickBtn);
-
   const regionBtn = document.createElement('button');
   regionBtn.className = `s2l-btn${regionPickingMode ? ' active' : ''}`;
-  regionBtn.id = 's2l-region-btn';
   regionBtn.textContent = 'Pick Region';
   regionBtn.addEventListener('click', toggleRegionMode);
   toolbar.appendChild(regionBtn);
 
-  // --- Capture-options row ---
+  // (Filter tabbar removed; the type selector at the top already conveys
+  // which type is being authored. The annotation list shows all types so
+  // every captured annotation is visible regardless of which type is active.)
+
+  // ----- Annotation list -----
+  const annotationList = document.createElement('div');
+  annotationList.className = 's2l-annotations';
+  annotationList.id = 's2l-annotation-list';
+
+  // ----- Capture-options row -----
   const captureRow = document.createElement('div');
   captureRow.className = 's2l-capture-row';
   const grabLabel = document.createElement('label');
   grabLabel.className = 's2l-grab-check';
   const grabInput = document.createElement('input');
   grabInput.type = 'checkbox';
-  grabInput.id = 's2l-grab-fullpage';
   grabInput.checked = grabFullPage;
-  grabInput.addEventListener('change', () => { grabFullPage = grabInput.checked; });
+  grabInput.addEventListener('change', () => {
+    grabFullPage = grabInput.checked;
+    // Un-checking invalidates the cached stitched capture — next pick should
+    // fall back to the viewport path again.
+    if (!grabFullPage) fullPageBase64 = '';
+  });
   grabLabel.appendChild(grabInput);
   grabLabel.appendChild(document.createTextNode(' Grab full page'));
   captureRow.appendChild(grabLabel);
 
-  // --- Tab bar (task / bug / comment / request / all) ---
-  const tabBar = document.createElement('div');
-  tabBar.className = 's2l-tabbar';
-  const tabs: { id: AnnotationTabId; label: string }[] = [
-    { id: 'all', label: 'All' },
-    { id: 'task', label: 'Task' },
-    { id: 'bug', label: 'Bug' },
-    { id: 'comment', label: 'Comment' },
-    { id: 'request', label: 'Request' },
-  ];
-  for (const t of tabs) {
-    const tabBtn = document.createElement('button');
-    const count = t.id === 'all'
-      ? annotations.length
-      : annotations.filter((a) => a.type === t.id).length;
-    tabBtn.className = `s2l-tab${activeTab === t.id ? ' active' : ''}`;
-    tabBtn.dataset.tab = t.id;
-    tabBtn.textContent = count > 0 ? `${t.label} (${count})` : t.label;
-    tabBtn.addEventListener('click', () => {
-      activeTab = t.id;
-      renderSidebar();
-    });
-    tabBar.appendChild(tabBtn);
-  }
-
-  // --- Annotation list ---
-  const annotationList = document.createElement('div');
-  annotationList.className = 's2l-annotations';
-  annotationList.id = 's2l-annotation-list';
-
-  // --- Recorder bar ---
+  // ----- Recorder bar -----
   const recBar = document.createElement('div');
   recBar.id = 's2l-rec-bar';
   recBar.className = 's2l-rec-bar';
 
-  // --- Footer ---
+  // ----- Recording preview (shows after stop) -----
+  const recPreview = document.createElement('div');
+  recPreview.className = 's2l-rec-preview';
+  recPreview.id = 's2l-rec-preview';
+
+  // ----- Footer -----
   const footer = document.createElement('div');
   footer.className = 's2l-footer';
-
   const exportWrapper = document.createElement('div');
   exportWrapper.className = 's2l-btn-export';
-
   const exportToggle = document.createElement('button');
   exportToggle.className = 's2l-btn';
-  exportToggle.id = 's2l-export-toggle';
-  exportToggle.textContent = 'Export \u25BE';
+  exportToggle.textContent = 'Export ▾';
   exportToggle.addEventListener('click', () => {
     shadow!.getElementById('s2l-export-menu')!.classList.toggle('open');
   });
-
   const exportMenu = document.createElement('div');
   exportMenu.className = 's2l-export-menu';
   exportMenu.id = 's2l-export-menu';
-
-  const exportOptions: Array<{ action: string; label: string }> = [
+  for (const opt of [
     { action: 'copy-md', label: 'Copy Markdown' },
     { action: 'download-zip', label: 'Download ZIP' },
     { action: 'download-json', label: 'Download JSON' },
-  ];
-  for (const opt of exportOptions) {
+  ]) {
     const optBtn = document.createElement('button');
     optBtn.className = 's2l-export-option';
     optBtn.dataset.action = opt.action;
@@ -287,35 +417,70 @@ function renderSidebar(): void {
     });
     exportMenu.appendChild(optBtn);
   }
-
   exportWrapper.appendChild(exportToggle);
   exportWrapper.appendChild(exportMenu);
-
   const mcpBtn = document.createElement('button');
   mcpBtn.className = 's2l-btn-primary';
-  mcpBtn.id = 's2l-mcp-btn';
-  mcpBtn.textContent = 'Send \u2192 MCP';
+  mcpBtn.textContent = 'Send → MCP';
   mcpBtn.addEventListener('click', handleSendToMcp);
-
   footer.appendChild(exportWrapper);
   footer.appendChild(mcpBtn);
 
-  // Assemble sidebar
+  // Assemble. Composer at top (under header) — matches the reference UX.
   sidebar.appendChild(header);
+  sidebar.appendChild(typeRow);
+  sidebar.appendChild(composer);
   sidebar.appendChild(toolbar);
-  sidebar.appendChild(captureRow);
-  sidebar.appendChild(tabBar);
   sidebar.appendChild(annotationList);
+  sidebar.appendChild(recPreview);
   sidebar.appendChild(recBar);
+  sidebar.appendChild(captureRow);
   sidebar.appendChild(footer);
   shadow.appendChild(sidebar);
 
-  const visibleAnnotations = activeTab === 'all'
-    ? annotations
-    : annotations.filter((a) => a.type === activeTab);
-  renderAnnotationList(visibleAnnotations, deleteAnnotation, shadow);
+  renderAnnotationList(annotations, deleteAnnotation, shadow);
   renderRecorderBar(shadow, isRecording, isRecording ? Date.now() - recordingStart : 0,
     selectedSources, handleStartRecording, handleStopRecording);
+  renderRecordingPreview();
+
+  // Restore focus to the textarea after re-render so typing isn't interrupted.
+  const ta = shadow.getElementById('s2l-draft-note') as HTMLTextAreaElement | null;
+  if (ta) {
+    ta.focus();
+    const len = ta.value.length;
+    try { ta.setSelectionRange(len, len); } catch { /* ignore */ }
+  }
+}
+
+function renderRecordingPreview(): void {
+  if (!shadow) return;
+  const container = shadow.getElementById('s2l-rec-preview');
+  if (!container) return;
+  clearElement(container);
+  if (!pendingRecording) return;
+  const seconds = Math.floor(pendingRecording.durationMs / 1000);
+  const mm = String(Math.floor(seconds / 60)).padStart(2, '0');
+  const ss = String(seconds % 60).padStart(2, '0');
+
+  const headerRow = document.createElement('div');
+  headerRow.className = 's2l-rec-preview-header';
+  const titleEl = document.createElement('span');
+  titleEl.className = 's2l-rec-preview-title';
+  titleEl.textContent = `#1 Video + audio — ${mm}:${ss}`;
+  const removeBtn = document.createElement('button');
+  removeBtn.className = 's2l-rec-preview-remove';
+  removeBtn.title = 'Remove recording';
+  removeBtn.textContent = '✕';
+  removeBtn.addEventListener('click', () => { pendingRecording = null; renderSidebar(); });
+  headerRow.appendChild(titleEl);
+  headerRow.appendChild(removeBtn);
+
+  const video = document.createElement('video');
+  video.className = 's2l-rec-preview-video';
+  video.controls = true;
+  video.src = `data:video/webm;base64,${pendingRecording.base64}`;
+  container.appendChild(headerRow);
+  container.appendChild(video);
 }
 
 function togglePickMode(): void {
@@ -324,25 +489,17 @@ function togglePickMode(): void {
     setSidebarVisible(false);
     startPicker(async (el) => {
       pickingMode = false;
+      const info = getElementInfo(el);
+      const elementScreenshotBase64 = await cropBoundingBox(info.boundingBox);
+      const cap: PickedCapture = {
+        selector: info.selector, xpath: info.xpath, elementHTML: info.elementHTML,
+        boundingBox: info.boundingBox, elementScreenshotBase64,
+      };
+      drafts[activeTab].capture = cap;
+      lastCapture = cap;
       setSidebarVisible(true);
       renderSidebar();
-      const info = getElementInfo(el);
-      showPopover(el, annotations.length + 1, async (partial) => {
-        const elementScreenshotBase64 = await cropBoundingBox(info.boundingBox);
-        const ann: Annotation = {
-          id: generateId(),
-          number: annotations.length + 1, // atomic at push time
-          ...partial,
-          ...info,
-          elementScreenshotBase64,
-          elementScreenshotPath: '',
-          createdAt: new Date().toISOString(),
-        };
-        annotations.push(ann);
-        renderSidebar();
-      }, () => { pickingMode = false; setSidebarVisible(true); renderSidebar(); });
     }, () => {
-      // ESC pressed before selecting an element
       pickingMode = false;
       setSidebarVisible(true);
       renderSidebar();
@@ -365,12 +522,17 @@ function toggleRegionMode(): void {
   regionPickingMode = true;
   renderSidebar();
   setSidebarVisible(false);
-
   startRegionPicker(async (box: BoundingBox) => {
     regionPickingMode = false;
+    const elementScreenshotBase64 = await cropBoundingBox(box);
+    const cap: PickedCapture = {
+      selector: `region(${Math.round(box.x)},${Math.round(box.y)},${Math.round(box.width)}x${Math.round(box.height)})`,
+      elementHTML: '', boundingBox: box, elementScreenshotBase64,
+    };
+    drafts[activeTab].capture = cap;
+    lastCapture = cap;
     setSidebarVisible(true);
     renderSidebar();
-    await captureRegionAnnotation(box);
   }, () => {
     regionPickingMode = false;
     setSidebarVisible(true);
@@ -378,29 +540,16 @@ function toggleRegionMode(): void {
   });
 }
 
-// Crop `box` (in page coords) into a PNG base64. When the user has opted into
-// "Grab full page", reuse or lazily acquire the stitched full-page capture.
-// Otherwise take a single-frame viewport capture and shift the box by scroll.
+// Crop the picked element/region using a single-frame viewport capture only.
+// We never trigger the slow scroll-and-stitch full-page capture during pick —
+// that runs once at Send → MCP time if the user opted in to "Grab full page".
 async function cropBoundingBox(box: BoundingBox): Promise<string> {
-  if (grabFullPage) {
-    if (!fullPageBase64) {
-      const res = await chrome.runtime.sendMessage({ type: 'CAPTURE_FULL_PAGE' });
-      fullPageBase64 = res?.base64 ?? '';
-    }
-    if (!fullPageBase64) return '';
-    const res = await chrome.runtime.sendMessage({
-      type: 'CROP_ELEMENT', fullPageBase64, boundingBox: box,
-    });
-    return res?.base64 ?? '';
-  }
   const viewportRes = await chrome.runtime.sendMessage({ type: 'CAPTURE_VIEWPORT' });
   const viewportBase64 = viewportRes?.base64 ?? '';
   if (!viewportBase64) return '';
   const viewportBox: BoundingBox = {
-    x: box.x - window.scrollX,
-    y: box.y - window.scrollY,
-    width: box.width,
-    height: box.height,
+    x: box.x - window.scrollX, y: box.y - window.scrollY,
+    width: box.width, height: box.height,
   };
   const cropRes = await chrome.runtime.sendMessage({
     type: 'CROP_ELEMENT', fullPageBase64: viewportBase64, boundingBox: viewportBox,
@@ -408,38 +557,45 @@ async function cropBoundingBox(box: BoundingBox): Promise<string> {
   return cropRes?.base64 ?? '';
 }
 
-async function captureRegionAnnotation(box: BoundingBox): Promise<void> {
-  const regionScreenshotPromise = cropBoundingBox(box);
-
-  // Scroll the picked region into view, then anchor popover at its viewport position
-  const targetScrollY = Math.max(0, box.y - 80);
-  const viewportTop = box.y - targetScrollY;
-  const viewportLeft = box.x;
-  const anchorRect = {
-    top: viewportTop,
-    left: viewportLeft,
-    bottom: viewportTop + box.height,
-    right: viewportLeft + box.width,
-    width: box.width,
-    height: box.height,
-  };
-
-  showPopover(document.body, annotations.length + 1, async (partial) => {
-    const elementScreenshotBase64 = await regionScreenshotPromise;
+function commitDraft(): void {
+  // Commit ALL four per-type drafts that have content. Each draft uses its own
+  // capture if present, otherwise the most recent shared one. This lets the
+  // user fill task + bug + comment + request and commit in one click.
+  let added = 0;
+  for (const type of ORDER) {
+    const draft = drafts[type];
+    const note = draft.note.trim();
+    if (!note && !draft.capture) continue;
+    const cap = draft.capture ?? lastCapture ?? {
+      selector: '', elementHTML: '', boundingBox: { x: 0, y: 0, width: 0, height: 0 },
+      elementScreenshotBase64: '',
+    };
     const ann: Annotation = {
       id: generateId(),
       number: annotations.length + 1,
-      ...partial,
-      selector: `region(${Math.round(box.x)},${Math.round(box.y)},${Math.round(box.width)}x${Math.round(box.height)})`,
-      elementHTML: '',
-      boundingBox: box,
-      elementScreenshotBase64,
+      type,
+      note,
+      selector: cap.selector,
+      xpath: cap.xpath,
+      elementHTML: cap.elementHTML,
+      boundingBox: cap.boundingBox,
+      elementScreenshotBase64: cap.elementScreenshotBase64,
       elementScreenshotPath: '',
       createdAt: new Date().toISOString(),
     };
     annotations.push(ann);
-    renderSidebar();
-  }, () => { renderSidebar(); }, { anchorRect, highlightBox: box });
+    added++;
+  }
+  if (added === 0) return;
+  for (const type of ORDER) drafts[type] = { note: '' };
+  lastCapture = null;
+  renderSidebar();
+}
+
+function clearAllDrafts(): void {
+  for (const type of ORDER) drafts[type] = { note: '' };
+  lastCapture = null;
+  renderSidebar();
 }
 
 function deleteAnnotation(id: string): void {
@@ -449,12 +605,11 @@ function deleteAnnotation(id: string): void {
 }
 
 async function buildSession(): Promise<Session> {
-  // Only scroll-and-stitch the full page if the user opted in.
   if (grabFullPage && !fullPageBase64) {
     const res = await chrome.runtime.sendMessage({ type: 'CAPTURE_FULL_PAGE' });
     fullPageBase64 = res?.base64 ?? '';
   }
-  const session: Session = {
+  return {
     id: generateId(),
     url: window.location.href,
     pageTitle: document.title,
@@ -464,17 +619,15 @@ async function buildSession(): Promise<Session> {
     annotations: [...annotations],
     consoleLogs: getConsoleLogs(),
     sessionStorage: snapshotSessionStorage(),
-  };
-  if (pendingRecording) {
-    session.recording = {
-      filename: 'recording.webm',
+    recordings: pendingRecording ? [{
+      id: generateId(),
+      filename: 'recording-1.webm',
       path: '',
       sources: pendingRecording.sources,
       durationMs: pendingRecording.durationMs,
       base64: pendingRecording.base64,
-    };
-  }
-  return session;
+    }] : [],
+  };
 }
 
 async function handleExport(action: string): Promise<void> {
@@ -495,11 +648,11 @@ async function handleExport(action: string): Promise<void> {
 async function handleSendToMcp(): Promise<void> {
   const session = await buildSession();
   const res = await chrome.runtime.sendMessage({ type: 'SEND_TO_MCP', session });
-  if (res?.error) alert(`Send2LLM: MCP error \u2014 ${res.error}`);
+  if (res?.error) alert(`Send2LLM: MCP error — ${res.error}`);
   else alert('Send2LLM: Session sent to MCP server.');
 }
 
-async function handleStartRecording(sources: ('screen' | 'microphone' | 'tab-audio')[]): Promise<void> {
+async function handleStartRecording(sources: RecordingSource[]): Promise<void> {
   selectedSources = new Set(sources);
   try {
     await startRecording(sources);
@@ -509,10 +662,12 @@ async function handleStartRecording(sources: ('screen' | 'microphone' | 'tab-aud
   }
   isRecording = true;
   recordingStart = Date.now();
-  recordingInterval = setInterval(() => renderRecorderBar(
-    shadow!, true, Date.now() - recordingStart, selectedSources,
-    handleStartRecording, handleStopRecording,
-  ), 1000);
+  // Tick the pill's timer text in place (no re-render → drag stays smooth).
+  recordingInterval = setInterval(() => {
+    if (!shadow) return;
+    const t = shadow.getElementById('s2l-rec-pill-timer');
+    if (t) t.textContent = formatRecTime(Date.now() - recordingStart);
+  }, 1000);
   renderSidebar();
 }
 
