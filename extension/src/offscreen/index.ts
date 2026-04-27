@@ -1,4 +1,5 @@
 import { stitchStrips, cropFromFullPage } from './canvas.js';
+import { startRecording, stopRecording, getState } from './recorder.js';
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.target !== 'offscreen') return false;
@@ -15,6 +16,22 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       .then(sendResponse)
       .catch((e) => sendResponse({ error: String(e) }));
     return true;
+  }
+  if (message.type === 'OFFSCREEN_RECORDING_START') {
+    startRecording(message.sources)
+      .then(() => sendResponse({ ok: true }))
+      .catch((e) => sendResponse({ error: String(e) }));
+    return true;
+  }
+  if (message.type === 'OFFSCREEN_RECORDING_STOP') {
+    stopRecording()
+      .then((res) => sendResponse(res))
+      .catch((e) => sendResponse({ error: String(e) }));
+    return true;
+  }
+  if (message.type === 'OFFSCREEN_RECORDING_STATE') {
+    sendResponse(getState());
+    return false;
   }
   return false;
 });

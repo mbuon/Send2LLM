@@ -8,6 +8,7 @@ import { startRecording, stopRecording } from '../recorder.js';
 import { renderAnnotationList } from './annotation-list.js';
 import { renderRecorderBar } from './recorder-bar.js';
 import { shouldShowRecordIntro, showRecordIntro } from './record-intro.js';
+import { getRecordingState } from '../recorder.js';
 
 type AnnotationType = Annotation['type'];
 type RecordingSource = 'screen' | 'microphone' | 'tab-audio';
@@ -27,7 +28,32 @@ interface DraftState {
 
 const POS_KEY = 's2l-sidebar-pos';
 const ENABLED_KEY = 's2l-sidebar-enabled';
+const PENDING_REC_KEY = 's2l-pending-recording';
+const SCALE_KEY = 's2l-sidebar-scale';
 const ORDER: AnnotationType[] = ['task', 'bug', 'comment', 'request'];
+
+type ScaleStep = 'sm' | 'md' | 'lg';
+const SCALES: ScaleStep[] = ['sm', 'md', 'lg'];
+let currentScale: ScaleStep = 'md';
+
+function nextScale(s: ScaleStep, dir: 1 | -1): ScaleStep {
+  const i = SCALES.indexOf(s);
+  return SCALES[Math.max(0, Math.min(SCALES.length - 1, i + dir))];
+}
+
+async function loadScale(): Promise<void> {
+  try {
+    const v = await chrome.storage?.local?.get?.(SCALE_KEY);
+    const s = v?.[SCALE_KEY] as string | undefined;
+    if (s === 'sm' || s === 'md' || s === 'lg') currentScale = s;
+  } catch { /* ignore */ }
+}
+
+async function saveScale(): Promise<void> {
+  try {
+    await chrome.storage?.local?.set?.({ [SCALE_KEY]: currentScale });
+  } catch { /* ignore */ }
+}
 
 // Persist the user's sidebar-on / sidebar-off intent across page loads and
 // across tabs. chrome.storage.local survives navigation; localStorage would
@@ -78,7 +104,66 @@ export function mountSidebar(): void {
   sidebarHost.id = 's2l-sidebar-host';
   shadow = sidebarHost.attachShadow({ mode: 'open' });
   document.body.appendChild(sidebarHost);
+  // Render synchronously so the user sees the widget immediately, then
+  // hydrate any cross-page state (active recording, finished pendingRecording)
+  // and re-render once it lands.
   renderSidebar();
+  void hydrateRecordingState();
+}
+
+// Pull the live recording state from the offscreen document and any
+// finished-but-not-yet-attached recording from chrome.storage.local. The
+// previous content script (on a different page) may have started a recording
+// that is still rolling, or stopped one that hasn't been attached to a
+// session yet. Either way the new sidebar should reflect that state.
+async function hydrateRecordingState(): Promise<void> {
+  await loadScale();
+  // Re-apply scale class in case the sidebar was already rendered before
+  // hydrate finished. (mountSidebar calls renderSidebar synchronously, then
+  // we async-load and may need to refresh.)
+  if (shadow) {
+    const sb = shadow.getElementById('s2l-sidebar');
+    if (sb) {
+      sb.classList.remove('s2l-scale-sm', 's2l-scale-md', 's2l-scale-lg');
+      sb.classList.add(`s2l-scale-${currentScale}`);
+    }
+  }
+  try {
+    const live = await getRecordingState();
+    if (live.active && live.startedAt) {
+      isRecording = true;
+      recordingStart = live.startedAt;
+      if (live.sources) selectedSources = new Set(live.sources);
+      // Restart the timer ticker (it was killed with the old content script).
+      if (recordingInterval) clearInterval(recordingInterval);
+      recordingInterval = setInterval(() => {
+        if (!shadow) return;
+        const t = shadow.getElementById('s2l-rec-pill-timer');
+        if (t) t.textContent = formatRecTime(Date.now() - recordingStart);
+      }, 1000);
+      renderSidebar();
+      return;
+    }
+  } catch { /* ignore */ }
+
+  // No live recording — check for a finished one waiting to be attached.
+  try {
+    const stored = await chrome.storage?.local?.get?.(PENDING_REC_KEY);
+    const rec = stored?.[PENDING_REC_KEY] as
+      { base64?: string; durationMs?: number; sources?: RecordingSource[] } | undefined;
+    if (rec?.base64) {
+      pendingRecording = {
+        base64: rec.base64,
+        durationMs: rec.durationMs ?? 0,
+        sources: rec.sources ?? ['screen'],
+      };
+      renderSidebar();
+    }
+  } catch { /* ignore */ }
+}
+
+async function clearPendingRecordingStorage(): Promise<void> {
+  try { await chrome.storage?.local?.remove?.(PENDING_REC_KEY); } catch { /* ignore */ }
 }
 
 export function unmountSidebar(): void {
@@ -128,10 +213,19 @@ export async function ensureSidebarFromStorage(): Promise<void> {
 export function watchSidebarFlag(): void {
   try {
     chrome.storage?.onChanged?.addListener((changes, area) => {
-      if (area !== 'local' || !(ENABLED_KEY in changes)) return;
-      const next = Boolean(changes[ENABLED_KEY].newValue);
-      if (next && !sidebarHost) mountSidebar();
-      if (!next && sidebarHost) unmountSidebar();
+      if (area !== 'local') return;
+      if (ENABLED_KEY in changes) {
+        const next = Boolean(changes[ENABLED_KEY].newValue);
+        if (next && !sidebarHost) mountSidebar();
+        if (!next && sidebarHost) unmountSidebar();
+      }
+      if (SCALE_KEY in changes && sidebarHost) {
+        const next = changes[SCALE_KEY].newValue as ScaleStep | undefined;
+        if (next === 'sm' || next === 'md' || next === 'lg') {
+          currentScale = next;
+          renderSidebar();
+        }
+      }
     });
   } catch { /* ignore */ }
 }
@@ -277,6 +371,7 @@ function renderSidebar(): void {
 
   const sidebar = document.createElement('div');
   sidebar.id = 's2l-sidebar';
+  sidebar.classList.add(`s2l-scale-${currentScale}`);
   applySavedPosition(sidebar);
   applyAutoSize(sidebar);
   attachResizeListener();
@@ -304,9 +399,37 @@ function renderSidebar(): void {
 
   const headerActions = document.createElement('div');
   headerActions.className = 's2l-header-actions';
+
+  // Shrink: cycle scale one step smaller (md → sm). Disabled at the smallest.
+  const shrinkBtn = document.createElement('button');
+  shrinkBtn.className = 's2l-btn-icon s2l-btn-scale';
+  shrinkBtn.title = 'Smaller';
+  shrinkBtn.setAttribute('aria-label', 'Decrease widget size');
+  shrinkBtn.textContent = 'a−';
+  shrinkBtn.disabled = currentScale === 'sm';
+  shrinkBtn.addEventListener('click', () => {
+    currentScale = nextScale(currentScale, -1);
+    void saveScale();
+    renderSidebar();
+  });
+
+  // Enlarge: cycle one step larger (md → lg). Disabled at the largest.
+  const enlargeBtn = document.createElement('button');
+  enlargeBtn.className = 's2l-btn-icon s2l-btn-scale';
+  enlargeBtn.title = 'Larger';
+  enlargeBtn.setAttribute('aria-label', 'Increase widget size');
+  enlargeBtn.textContent = 'A+';
+  enlargeBtn.disabled = currentScale === 'lg';
+  enlargeBtn.addEventListener('click', () => {
+    currentScale = nextScale(currentScale, 1);
+    void saveScale();
+    renderSidebar();
+  });
+
   const collapseBtn = document.createElement('button');
   collapseBtn.className = 's2l-btn-icon';
   collapseBtn.title = 'Collapse';
+  collapseBtn.setAttribute('aria-label', 'Collapse widget');
   collapseBtn.textContent = '−';
   collapseBtn.addEventListener('click', () => {
     shadow!.getElementById('s2l-sidebar')!.classList.toggle('collapsed');
@@ -314,8 +437,13 @@ function renderSidebar(): void {
   const closeBtn = document.createElement('button');
   closeBtn.className = 's2l-btn-icon';
   closeBtn.title = 'Close';
+  closeBtn.setAttribute('aria-label', 'Close widget');
   closeBtn.textContent = '✕';
   closeBtn.addEventListener('click', unmountSidebar);
+
+  // Order: a−  A+  −  ✕  (the two scale buttons sit left of collapse/close).
+  headerActions.appendChild(shrinkBtn);
+  headerActions.appendChild(enlargeBtn);
   headerActions.appendChild(collapseBtn);
   headerActions.appendChild(closeBtn);
   header.appendChild(title);
@@ -536,7 +664,11 @@ function renderRecordingPreview(): void {
   removeBtn.className = 's2l-rec-preview-remove';
   removeBtn.title = 'Remove recording';
   removeBtn.textContent = '✕';
-  removeBtn.addEventListener('click', () => { pendingRecording = null; renderSidebar(); });
+  removeBtn.addEventListener('click', () => {
+    pendingRecording = null;
+    void clearPendingRecordingStorage();
+    renderSidebar();
+  });
   headerRow.appendChild(titleEl);
   headerRow.appendChild(removeBtn);
 
@@ -544,6 +676,19 @@ function renderRecordingPreview(): void {
   video.className = 's2l-rec-preview-video';
   video.controls = true;
   video.src = `data:video/webm;base64,${pendingRecording.base64}`;
+  video.title = 'Double-click to open in default video player';
+  // Double-click opens the webm in the OS default video player. The user's
+  // OS still owns the file association — Send2LLM only writes the file and
+  // asks the browser to hand it off via chrome.downloads.open().
+  video.addEventListener('dblclick', () => {
+    if (!pendingRecording) return;
+    chrome.runtime.sendMessage({
+      type: 'OPEN_IN_DEFAULT_APP',
+      base64: pendingRecording.base64,
+      mimeType: 'video/webm',
+      filename: `Send2LLM/recording-${Date.now()}.webm`,
+    });
+  });
   container.appendChild(headerRow);
   container.appendChild(video);
 }
@@ -636,8 +781,16 @@ async function cropBoundingBox(box: BoundingBox, expand = 0): Promise<string> {
     width: box.width + pad * 2,
     height: box.height + pad * 2,
   };
+  // Pass devicePixelRatio so the offscreen crop maps CSS-pixel coordinates to
+  // the actual device-pixel image returned by chrome.tabs.captureVisibleTab.
+  // On retina (dpr=2) the viewport screenshot is 2x the page CSS dimensions;
+  // without this scale the crop reads from the wrong region (top-left of
+  // image) and returns blank pixels.
   const cropRes = await chrome.runtime.sendMessage({
-    type: 'CROP_ELEMENT', fullPageBase64: viewportBase64, boundingBox: viewportBox,
+    type: 'CROP_ELEMENT',
+    fullPageBase64: viewportBase64,
+    boundingBox: viewportBox,
+    dpr: window.devicePixelRatio || 1,
   });
   return cropRes?.base64 ?? '';
 }
@@ -733,8 +886,27 @@ async function handleExport(action: string): Promise<void> {
 async function handleSendToMcp(): Promise<void> {
   const session = await buildSession();
   const res = await chrome.runtime.sendMessage({ type: 'SEND_TO_MCP', session });
-  if (res?.error) alert(`Send2LLM: MCP error — ${res.error}`);
-  else alert('Send2LLM: Session sent to MCP server.');
+  if (res?.error) {
+    alert(`Send2LLM: MCP error — ${res.error}`);
+    return;
+  }
+  alert('Send2LLM: Session sent to MCP server.');
+  // The recording is now persisted on the MCP server; clear our local copy
+  // so the next session starts fresh and the cross-page storage entry is
+  // not picked up again on the next page load. Also reset the per-type
+  // drafts and the annotation list — the user just shipped them, so the
+  // sidebar should not surprise them by hanging on to stale state.
+  pendingRecording = null;
+  annotations = [];
+  for (const t of ORDER) drafts[t] = { note: '' };
+  lastCapture = null;
+  await clearPendingRecordingStorage();
+  // Dismiss the widget after the user acknowledges the success alert.
+  // mountSidebar() / the toolbar icon click brings it back. The persisted
+  // "enabled" flag is also cleared so navigating to a new tab won't auto-
+  // mount it until the user explicitly opens it again.
+  unmountSidebar();
+  void setEnabledFlag(false);
 }
 
 async function handleStartRecording(sources: RecordingSource[]): Promise<void> {

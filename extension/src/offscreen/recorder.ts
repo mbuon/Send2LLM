@@ -3,7 +3,13 @@ let chunks: Blob[] = [];
 let startTime = 0;
 let activeSources: ('screen' | 'microphone' | 'tab-audio')[] = [];
 
+export function getState(): { active: boolean; startedAt?: number; sources?: ('screen' | 'microphone' | 'tab-audio')[] } {
+  if (!mediaRecorder) return { active: false };
+  return { active: true, startedAt: startTime, sources: [...activeSources] };
+}
+
 export async function startRecording(sources: ('screen' | 'microphone' | 'tab-audio')[]): Promise<void> {
+  if (mediaRecorder) throw new Error('Recording already in progress');
   activeSources = sources;
   chunks = [];
 
@@ -31,13 +37,18 @@ export function stopRecording(): Promise<{ base64: string; durationMs: number; s
   return new Promise((resolve, reject) => {
     if (!mediaRecorder) { reject(new Error('No active recording')); return; }
     const durationMs = Date.now() - startTime;
-    mediaRecorder.onstop = async () => {
+    const recorder = mediaRecorder;
+    recorder.onstop = async () => {
       const blob = new Blob(chunks, { type: 'video/webm' });
       const base64 = await blobToBase64(blob);
-      resolve({ base64, durationMs, sources: activeSources });
+      const result = { base64, durationMs, sources: [...activeSources] };
+      mediaRecorder = null;
+      activeSources = [];
+      chunks = [];
+      resolve(result);
     };
-    mediaRecorder.stop();
-    mediaRecorder.stream.getTracks().forEach((t) => t.stop());
+    recorder.stop();
+    recorder.stream.getTracks().forEach((t) => t.stop());
   });
 }
 

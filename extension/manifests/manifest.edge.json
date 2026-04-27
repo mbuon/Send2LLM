@@ -3,7 +3,7 @@
   "name": "Send2LLM",
   "version": "0.1.0",
   "description": "Annotate web pages and send context to AI coding agents",
-  "permissions": ["activeTab", "scripting", "storage", "offscreen", "tabs"],
+  "permissions": ["activeTab", "scripting", "storage", "offscreen", "tabs", "downloads"],
   "host_permissions": ["<all_urls>"],
   "background": { "service_worker": "background/index.js", "type": "module" },
   "content_scripts": [{

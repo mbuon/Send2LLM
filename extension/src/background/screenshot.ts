@@ -1,6 +1,12 @@
 const OFFSCREEN_URL = chrome.runtime.getURL('offscreen.html');
 
-async function ensureOffscreen(): Promise<void> {
+// Both BLOBS (for canvas stitching) and USER_MEDIA (for MediaRecorder /
+// getDisplayMedia) are declared up front so we never have to recreate the
+// offscreen document just to add a reason. Chrome only allows one offscreen
+// per extension; combining reasons avoids "single offscreen" errors.
+const OFFSCREEN_REASONS = ['BLOBS', 'USER_MEDIA'] as const;
+
+export async function ensureOffscreen(): Promise<void> {
   const offscreen = (chrome as any).offscreen;
   // Firefox MV2 has no chrome.offscreen — the background page itself can host canvas
   if (!offscreen?.createDocument) return;
@@ -11,8 +17,8 @@ async function ensureOffscreen(): Promise<void> {
   try {
     await offscreen.createDocument({
       url: OFFSCREEN_URL,
-      reasons: ['BLOBS'],
-      justification: 'Canvas stitching for Send2LLM',
+      reasons: OFFSCREEN_REASONS,
+      justification: 'Canvas stitching + screen/mic recording for Send2LLM',
     });
   } catch (e) {
     const msg = String(e);

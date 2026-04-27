@@ -35,7 +35,7 @@ Annotations are typed (`task` / `bug` / `comment` / `request`) so the agent can 
 ## Features
 
 - **Floating sidebar** — a draggable, collapsible widget injected into any page. Position is remembered, and the on/off state survives navigation, link clicks, and new tabs (synced via `chrome.storage.local`).
-- **Element & region picks** — click any element to capture a tight crop with selector + xpath + outerHTML. Or drag a rectangle to capture an arbitrary region.
+- **Element & region picks** — click any element to capture a tight crop with selector + xpath + outerHTML. Or drag a rectangle to capture an arbitrary region. Double-click any thumbnail in the sidebar to open the screenshot full-size in your OS default image viewer; double-click the recording preview to open the webm in your default video player.
 - **Four annotation types** — `task`, `bug`, `comment`, `request`. Type each draft separately, then "Add annotations" to commit all four at once.
 - **Full-page screenshot** — opt-in checkbox. Scrolls the entire page, primes lazy-loaded content, freezes sticky headers and animations, then stitches into a single JPEG. The Send2LLM widget itself is hidden during capture so it never appears in the output.
 - **Console log capture** — content script injects at `document_start` and records all `console.*` output from page load onward.
