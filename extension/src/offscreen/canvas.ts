@@ -34,13 +34,18 @@ export async function stitchStrips(strips: Strip[]): Promise<string> {
     y += visibleHeights[i];
   }
 
-  const blob = await canvas.convertToBlob({ type: 'image/png' });
+  // JPEG (quality 0.85) keeps the stitched full-page image well under
+  // Chrome's 64MB runtime.sendMessage cap even for tall news-site pages.
+  // Element crops off this image are exported server-side; minor JPEG
+  // artifacts are acceptable for a full-page context screenshot.
+  const blob = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.85 });
   return blobToBase64(blob);
 }
 
 export async function cropFromFullPage(
   fullPageBase64: string,
   x: number, y: number, width: number, height: number,
+  dpr: number = 1,
 ): Promise<string> {
   const img = await new Promise<HTMLImageElement>((resolve, reject) => {
     const i = new Image();
@@ -49,9 +54,32 @@ export async function cropFromFullPage(
     i.src = `data:image/png;base64,${fullPageBase64}`;
   });
 
-  const canvas = new OffscreenCanvas(width, height);
+  // captureVisibleTab / stitched canvas are in device pixels; box coords are CSS px.
+  // But some pages have a CSS-wide zoom or the actual image DPR may not match
+  // window.devicePixelRatio — derive the scale from the image itself against the
+  // logical viewport width reported by the caller. If dpr=1 we treat it as
+  // "scale to image size", otherwise trust the caller's DPR.
+  const sx = Math.round(x * dpr);
+  const sy = Math.round(y * dpr);
+  const sw = Math.max(1, Math.round(width * dpr));
+  const sh = Math.max(1, Math.round(height * dpr));
+
+  // Clamp to image bounds — drawImage with a source box partly outside the
+  // image silently draws nothing on Chrome/Safari.
+  const clampedSx = Math.max(0, Math.min(sx, img.width - 1));
+  const clampedSy = Math.max(0, Math.min(sy, img.height - 1));
+  const clampedSw = Math.max(1, Math.min(sw, img.width - clampedSx));
+  const clampedSh = Math.max(1, Math.min(sh, img.height - clampedSy));
+
+  console.log('[Send2LLM/offscreen] crop', {
+    img: { w: img.width, h: img.height },
+    src: { sx, sy, sw, sh }, clamped: { clampedSx, clampedSy, clampedSw, clampedSh },
+    dpr, input: { x, y, width, height },
+  });
+
+  const canvas = new OffscreenCanvas(clampedSw, clampedSh);
   const ctx = canvas.getContext('2d')!;
-  ctx.drawImage(img, x, y, width, height, 0, 0, width, height);
+  ctx.drawImage(img, clampedSx, clampedSy, clampedSw, clampedSh, 0, 0, clampedSw, clampedSh);
   const blob = await canvas.convertToBlob({ type: 'image/png' });
   return blobToBase64(blob);
 }
