@@ -26,16 +26,21 @@ export function buildMarkdown(session: Session): string {
     storageEntries.forEach(([k, v]) => lines.push(`${k}: ${v}`));
   }
 
-  lines.push(``, `## Annotations`);
+  lines.push(``, `## Annotations (${session.annotations.length})`);
   for (const ann of session.annotations) {
-    lines.push(
-      ``,
-      `### [${ann.type.toUpperCase()}] #${ann.number}`,
-      `Selector: \`${ann.selector}\``,
-      `> ${ann.note}`,
-      ``,
-      `![Element #${ann.number}](data:image/png;base64,${ann.elementScreenshotBase64})`,
-    );
+    lines.push(``, `### [${ann.type.toUpperCase()}] #${ann.number}`);
+    lines.push(`- Created: ${ann.createdAt}`);
+    lines.push(`- Page URL: ${session.url}`);
+    lines.push(`- Selector: \`${ann.selector || '—'}\``);
+    if (ann.xpath) lines.push(`- XPath: \`${ann.xpath}\``);
+    if (ann.boundingBox.width) {
+      const { x, y, width, height } = ann.boundingBox;
+      lines.push(`- Bounding box: ${Math.round(x)},${Math.round(y)} ${Math.round(width)}×${Math.round(height)}`);
+    }
+    lines.push(``, `> ${ann.note}`);
+    if (ann.elementScreenshotBase64) {
+      lines.push(``, `![Element #${ann.number}](data:image/png;base64,${ann.elementScreenshotBase64})`);
+    }
   }
 
   const recs = session.recordings ?? [];

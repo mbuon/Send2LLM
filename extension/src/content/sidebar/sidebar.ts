@@ -274,14 +274,14 @@ function renderSidebar(): void {
   const composer = document.createElement('div');
   composer.className = 's2l-composer';
   {
-    const draft = drafts[activeTab];
-    // Show thumbnail: prefer this draft's own pick, otherwise the most recent
-    // pick from any draft (will be applied to this annotation on Add).
-    const previewCapture = draft.capture ?? lastCapture ?? null;
+    // The captured image is shared across all four type drafts: one pick
+    // attaches to whichever tab was active, but the other tabs commit
+    // against `lastCapture` so all four annotations get the same picture.
+    // Show a single neutral preview in every tab — no "shared" warning.
+    const previewCapture = drafts[activeTab].capture ?? lastCapture ?? null;
     if (previewCapture?.elementScreenshotBase64) {
       const thumbWrap = document.createElement('div');
       thumbWrap.className = 's2l-draft-thumb-wrap';
-      if (!draft.capture) thumbWrap.classList.add('s2l-draft-thumb-shared');
       const thumb = document.createElement('img');
       thumb.className = 's2l-draft-thumb';
       thumb.src = `data:image/png;base64,${previewCapture.elementScreenshotBase64}`;
@@ -289,16 +289,18 @@ function renderSidebar(): void {
       const caption = document.createElement('div');
       caption.className = 's2l-draft-thumb-caption';
       const isRegion = previewCapture.selector.startsWith('region(');
-      caption.textContent = draft.capture
-        ? (isRegion ? 'Region captured' : `Element: ${previewCapture.selector || '(no selector)'}`)
-        : (isRegion ? 'Shared region (applies on Add)' : 'Shared element (applies on Add)');
+      caption.textContent = isRegion
+        ? 'Region captured'
+        : `Element: ${previewCapture.selector || '(no selector)'}`;
       const clearCap = document.createElement('button');
       clearCap.className = 's2l-draft-thumb-clear';
-      clearCap.title = draft.capture ? 'Remove capture from this note' : 'Dismiss shared capture';
+      clearCap.title = 'Remove capture (applies to all drafts)';
       clearCap.textContent = '✕';
       clearCap.addEventListener('click', () => {
-        if (drafts[activeTab].capture) drafts[activeTab].capture = undefined;
-        else lastCapture = null;
+        // Clear the capture for every draft and the shared fallback so the
+        // user gets one consistent state across all four type tabs.
+        for (const t of ORDER) drafts[t].capture = undefined;
+        lastCapture = null;
         renderSidebar();
       });
       thumbWrap.appendChild(thumb);
@@ -311,7 +313,7 @@ function renderSidebar(): void {
     textarea.className = 's2l-note-input';
     textarea.id = 's2l-draft-note';
     textarea.placeholder = `Describe this ${activeTab}…`;
-    textarea.value = draft.note;
+    textarea.value = drafts[activeTab].note;
     textarea.addEventListener('input', () => { drafts[activeTab].note = textarea.value; });
     textarea.addEventListener('keydown', (ev) => {
       if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey)) {
