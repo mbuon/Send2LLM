@@ -42,7 +42,7 @@ mcpServer.setRequestHandler(ListToolsRequestSchema, async () => ({
     { name: 'get_screenshot', description: 'Get full-page screenshot path', inputSchema: { type: 'object' as const, properties: { session_id: { type: 'string' } }, required: ['session_id'] } },
     { name: 'get_console_logs', description: 'Get console logs for a session', inputSchema: { type: 'object' as const, properties: { session_id: { type: 'string' } }, required: ['session_id'] } },
     { name: 'get_session_storage', description: 'Get sessionStorage for a session', inputSchema: { type: 'object' as const, properties: { session_id: { type: 'string' } }, required: ['session_id'] } },
-    { name: 'get_recording', description: 'Get recording file path', inputSchema: { type: 'object' as const, properties: { session_id: { type: 'string' } }, required: ['session_id'] } },
+    { name: 'get_recording', description: 'List recording file paths for a session, or one by 1-based index', inputSchema: { type: 'object' as const, properties: { session_id: { type: 'string' }, index: { type: 'number' } }, required: ['session_id'] } },
     { name: 'delete_annotation', description: 'Delete annotation by number (e.g. delete 2)', inputSchema: { type: 'object' as const, properties: { session_id: { type: 'string' }, number: { type: 'number' } }, required: ['session_id', 'number'] } },
   ],
 }));
@@ -58,7 +58,7 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (req) => {
     case 'get_screenshot': text = handleGetScreenshot(db, args!.session_id as string); break;
     case 'get_console_logs': text = handleGetConsoleLogs(db, args!.session_id as string); break;
     case 'get_session_storage': text = handleGetSessionStorage(db, args!.session_id as string); break;
-    case 'get_recording': text = handleGetRecording(db, args!.session_id as string); break;
+    case 'get_recording': text = handleGetRecording(db, args!.session_id as string, args!.index as number | undefined); break;
     case 'delete_annotation': text = handleDeleteAnnotation(db, args!.session_id as string, args!.number as number); break;
     default: text = `Unknown tool: ${name}`;
   }

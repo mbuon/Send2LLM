@@ -25,7 +25,7 @@ export function initDb(path: string): Db {
       captured_at TEXT NOT NULL,
       full_page_screenshot_path TEXT NOT NULL,
       session_storage TEXT NOT NULL DEFAULT '{}',
-      recording TEXT
+      recordings TEXT NOT NULL DEFAULT '[]'
     );
     CREATE TABLE IF NOT EXISTS annotations (
       id TEXT PRIMARY KEY,
@@ -53,12 +53,12 @@ export function initDb(path: string): Db {
 export function insertSession(db: Db, session: Session): void {
   const nextNumber = (db.prepare('SELECT COUNT(*) as c FROM sessions').get() as { c: number }).c + 1;
   db.prepare(`
-    INSERT INTO sessions (id, number, url, page_title, captured_at, full_page_screenshot_path, session_storage, recording)
+    INSERT INTO sessions (id, number, url, page_title, captured_at, full_page_screenshot_path, session_storage, recordings)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     session.id, nextNumber, session.url, session.pageTitle, session.capturedAt,
     session.fullPageScreenshotPath, JSON.stringify(session.sessionStorage),
-    session.recording ? JSON.stringify(session.recording) : null,
+    JSON.stringify(session.recordings ?? []),
   );
   for (const ann of session.annotations) {
     db.prepare(`
@@ -111,7 +111,7 @@ function hydrateSession(db: Db, row: any): Session {
     id: row.id, url: row.url, pageTitle: row.page_title,
     capturedAt: row.captured_at, fullPageScreenshotPath: row.full_page_screenshot_path,
     sessionStorage: JSON.parse(row.session_storage),
-    recording: row.recording ? JSON.parse(row.recording) : undefined,
+    recordings: row.recordings ? JSON.parse(row.recordings) : [],
     annotations, consoleLogs,
   };
 }

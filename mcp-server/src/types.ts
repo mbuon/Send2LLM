@@ -25,10 +25,14 @@ export interface ConsoleEntry {
 }
 
 export interface RecordingMeta {
+  id: string;
   filename: string;
   path: string;
   sources: ('screen' | 'microphone' | 'tab-audio')[];
   durationMs: number;
+  mimeType?: string;
+  hasAudio?: boolean;
+  hasVideo?: boolean;
 }
 
 export interface Session {
@@ -40,5 +44,5 @@ export interface Session {
   annotations: Annotation[];
   consoleLogs: ConsoleEntry[];
   sessionStorage: Record<string, string>;
-  recording?: RecordingMeta;
+  recordings: RecordingMeta[];
 }

@@ -22,8 +22,10 @@ export function handleLoadSession(db: Db, idOrNumber: string): string {
     `## Session Storage`,
     ...Object.entries(session.sessionStorage).map(([k, v]) => `  ${k}: ${v}`),
   ];
-  if (session.recording) {
-    lines.push(``, `## Recording`, `  ${session.recording.path} (${session.recording.durationMs}ms)`);
+  const recs = session.recordings ?? [];
+  if (recs.length > 0) {
+    lines.push(``, `## Recordings (${recs.length})`);
+    recs.forEach((r, i) => lines.push(`  #${i + 1} ${r.path} (${r.durationMs}ms, ${r.sources.join('+')})`));
   }
   return lines.join('\n');
 }
