@@ -33,6 +33,10 @@ export interface RecordingMeta {
   mimeType?: string;
   hasAudio?: boolean;
   hasVideo?: boolean;
+  /** Filled in by the server's automatic whisper.cpp transcription step. */
+  transcript?: string;
+  /** ISO-8601 timestamp when the transcript completed. */
+  transcribedAt?: string;
 }
 
 export interface Session {

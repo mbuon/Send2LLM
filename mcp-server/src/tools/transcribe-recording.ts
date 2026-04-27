@@ -17,22 +17,28 @@ async function have(bin: string): Promise<boolean> {
   catch { return false; }
 }
 
-async function transcribeOne(rec: RecordingMeta, index: number): Promise<string> {
-  const webmPath = rec.path;
-  if (!webmPath || !existsSync(webmPath)) return `#${index}: recording file missing: ${webmPath}`;
+/**
+ * Transcribe a single .webm file with whisper.cpp and return the text. Caches
+ * the result to disk next to the .webm as transcript-<index>.txt. Reusable by
+ * the HTTP /sessions endpoint (server-side auto-transcription on ingest) and
+ * by the MCP `transcribe_recording` tool.
+ *
+ * Returns an empty string when ffmpeg / whisper-cli / the model are missing.
+ * Throws only on disk-IO failures; tool errors are reported by string.
+ */
+export async function transcribeFile(webmPath: string, index: number): Promise<string> {
+  if (!webmPath || !existsSync(webmPath)) return '';
 
   const transcriptPath = join(dirname(webmPath), `transcript-${index}.txt`);
   if (existsSync(transcriptPath)) {
     const cached = readFileSync(transcriptPath, 'utf8');
-    // An empty cache file means a previous run failed to produce output.
-    // Retry rather than returning an empty transcript forever.
-    if (cached.trim().length > 0) return `#${index}: ${cached}`;
+    if (cached.trim().length > 0) return cached.trim();
     try { unlinkSync(transcriptPath); } catch { /* ignore */ }
   }
 
-  if (!(await have('ffmpeg'))) return `#${index}: ffmpeg not installed.`;
-  if (!(await have('whisper-cli'))) return `#${index}: whisper-cli not installed.`;
-  if (!existsSync(MODEL_PATH)) return `#${index}: whisper model missing at ${MODEL_PATH}`;
+  if (!(await have('ffmpeg'))) return '';
+  if (!(await have('whisper-cli'))) return '';
+  if (!existsSync(MODEL_PATH)) return '';
 
   const wavPath = join(dirname(webmPath), `recording-${index}.wav`);
   try {
@@ -40,14 +46,23 @@ async function transcribeOne(rec: RecordingMeta, index: number): Promise<string>
     await pExecFile('whisper-cli', ['-m', MODEL_PATH, '-f', wavPath, '-otxt', '-nt']);
     const rawTxtPath = `${wavPath}.txt`;
     const transcript = existsSync(rawTxtPath) ? readFileSync(rawTxtPath, 'utf8').trim() : '';
-    // Only cache when there's something to cache; an empty file would
-    // short-circuit future retries.
     if (transcript.length > 0) writeFileSync(transcriptPath, transcript);
     try { unlinkSync(wavPath); unlinkSync(rawTxtPath); } catch { /* ignore */ }
-    return `#${index}: ${transcript || '(empty transcript)'}`;
-  } catch (err) {
-    return `#${index}: transcription failed — ${(err as Error).message}`;
+    return transcript;
+  } catch {
+    return '';
   }
+}
+
+async function transcribeOne(rec: RecordingMeta, index: number): Promise<string> {
+  if (rec.transcript && rec.transcript.trim().length > 0) return `#${index}: ${rec.transcript}`;
+  const webmPath = rec.path;
+  if (!webmPath || !existsSync(webmPath)) return `#${index}: recording file missing: ${webmPath}`;
+  if (!(await have('ffmpeg'))) return `#${index}: ffmpeg not installed.`;
+  if (!(await have('whisper-cli'))) return `#${index}: whisper-cli not installed.`;
+  if (!existsSync(MODEL_PATH)) return `#${index}: whisper model missing at ${MODEL_PATH}`;
+  const text = await transcribeFile(webmPath, index);
+  return `#${index}: ${text || '(empty transcript)'}`;
 }
 
 export async function handleTranscribeRecording(db: Db, sessionId: string, index?: number): Promise<string> {

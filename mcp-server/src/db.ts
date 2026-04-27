@@ -131,3 +131,10 @@ export function deleteAnnotation(db: Db, sessionId: string, number: number): boo
   const result = db.prepare('DELETE FROM annotations WHERE session_id = ? AND number = ?').run(sessionId, number);
   return result.changes > 0;
 }
+
+// Replace the recordings JSON for a session in place. Used by the server's
+// automatic transcription step to write transcript text back without
+// rewriting the whole session row.
+export function updateSessionRecordings(db: Db, sessionId: string, recordings: unknown[]): void {
+  db.prepare('UPDATE sessions SET recordings = ? WHERE id = ?').run(JSON.stringify(recordings), sessionId);
+}

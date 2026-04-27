@@ -1,9 +1,10 @@
 // mcp-server/src/http.ts
 import express, { type Express } from 'express';
 import type { Db } from './db.js';
-import { insertSession } from './db.js';
+import { insertSession, updateSessionRecordings } from './db.js';
 import { saveBase64Asset } from './storage.js';
 import type { Session } from './types.js';
+import { transcribeFile } from './tools/transcribe-recording.js';
 
 export function createHttpApp(db: Db, storageRoot: string): Express {
   const app = express();
@@ -72,6 +73,29 @@ export function createHttpApp(db: Db, storageRoot: string): Express {
       }
       insertSession(db, session);
       res.status(201).json({ id: session.id });
+
+      // Fire-and-forget: transcribe each recording in the background and
+      // patch the session row when each one finishes. The HTTP response
+      // already returned 201 so the extension doesn't wait for whisper.
+      const recs = session.recordings ?? [];
+      if (recs.length > 0) {
+        void (async () => {
+          for (let i = 0; i < recs.length; i++) {
+            const rec = recs[i];
+            if (!rec.path) continue;
+            const text = await transcribeFile(rec.path, i + 1);
+            if (text) {
+              rec.transcript = text;
+              rec.transcribedAt = new Date().toISOString();
+              try {
+                updateSessionRecordings(db, session.id, recs);
+              } catch (e) {
+                console.error('failed to persist transcript', e);
+              }
+            }
+          }
+        })();
+      }
     } catch (err) {
       console.error(err);
       res.status(500).json({ error: 'Internal error' });
